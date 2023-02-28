@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sun Oct  9 17:53:48 2022
+Created on Tue Feb 28 13:51:03 2023
 
 @author: martigtu@stud.ntnu.no
 """
@@ -31,6 +31,7 @@ from plot import nice_plot
 
 import matplotlib.pyplot as plt
 
+import math
 
 def synthetic1():
     # setup
@@ -81,38 +82,6 @@ def synthetic2():
 
 
 
-def synthetic3():
-    # setup
-    train       = 500
-    test        = 500
-    n_classes   = 5
-    ts_length   = 160
-    
-    # create data sets
-    dataset_train = SyntheticLabeledData([
-        SyntheticData(('sin',), (70,), (1.0,), int(0.2*test), ts_length),
-        SyntheticData(('sin',), (25,), (1.0,), int(0.2*test), ts_length),
-        SyntheticData(('sin', 'sin'), (70, 25), (0.5, 0.5), int(0.2*test), ts_length),
-        SyntheticData(('saw',), (100,), (1.0,), int(0.2*test), ts_length),
-        SyntheticData(('abs sin',), (70,), (1.0,), int(0.2*test), ts_length)
-    ])
-    dataset_test = SyntheticLabeledData([
-        SyntheticData(('sin',), (70,), (1.0,), int(0.2*train), ts_length),
-        SyntheticData(('sin',), (25,), (1.0,), int(0.2*train), ts_length),
-        SyntheticData(('sin', 'sin'), (70, 25), (0.5, 0.5), int(0.2*train), ts_length),
-        SyntheticData(('saw',), (50,), (1.0,), int(0.2*train), ts_length),
-        SyntheticData(('abs sin',), (70,), (1.0,), int(0.2*train), ts_length)
-    ])
-    
-    # create data loader
-    batch_size  = 32
-    loader_train  = DataLoader(dataset_train, batch_size=batch_size, num_workers=0, shuffle=True)
-    loader_test   = DataLoader(dataset_test, batch_size=batch_size, num_workers=0, shuffle=True)
-
-    return train, test, n_classes, ts_length, batch_size, dataset_train, dataset_test, loader_train, loader_test
-
-
-import math
 def dim_from_length(ts_length, downsampling_limit=10):
     '''
     Get the dim multipliers for the downsampling layers in the Unet model.
