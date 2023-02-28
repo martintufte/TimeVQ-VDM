@@ -1,17 +1,16 @@
 """
 `Dataset` (pytorch) class is defined.
 """
+from typing import Union
 import math
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset
 from sklearn.preprocessing import LabelEncoder
 
-from pathlib import Path
-
-
-
+from utils import get_root_dir
 
 
 class DatasetImporterUCR(object):
@@ -19,19 +18,24 @@ class DatasetImporterUCR(object):
     This uses train and test sets as given.
     To compare with the results from ["Unsupervised scalable representation learning for multivariate time series"]
     """
-    def __init__(self, cwdir, subset_name: str, data_scaling: bool, **kwargs):
-        self.data_root = cwdir.joinpath('datasets', 'UCRArchive_2018', subset_name)
+    def __init__(self, dataset_name: str, data_scaling: bool, **kwargs):
+        """
+        :param dataset_name: e.g., "ElectricDevices"
+        :param data_scaling
+        """
+        # download_ucr_datasets()
+        self.data_root = get_root_dir().joinpath("datasets", "UCRArchive_2018", dataset_name)
 
         # fetch an entire dataset
-        df_train = pd.read_csv(self.data_root.joinpath(f"{subset_name}_TRAIN.tsv"), sep='\t', header=None)
-        df_test = pd.read_csv(self.data_root.joinpath(f"{subset_name}_TEST.tsv"), sep='\t', header=None)
+        df_train = pd.read_csv(self.data_root.joinpath(f"{dataset_name}_TRAIN.tsv"), sep='\t', header=None)
+        df_test = pd.read_csv(self.data_root.joinpath(f"{dataset_name}_TEST.tsv"), sep='\t', header=None)
 
         self.X_train, self.X_test = df_train.iloc[:, 1:].values, df_test.iloc[:, 1:].values
         self.Y_train, self.Y_test = df_train.iloc[:, [0]].values, df_test.iloc[:, [0]].values
-        
+
         le = LabelEncoder()
-        self.Y_train = le.fit_transform(self.Y_train)[:, None]
-        self.Y_test = le.transform(self.Y_test)[:, None]
+        self.Y_train = le.fit_transform(self.Y_train.ravel())[:, None]
+        self.Y_test = le.transform(self.Y_test.ravel())[:, None]
 
         if data_scaling:
             # following [https://github.com/White-Link/UnsupervisedScalableRepresentationLearningTimeSeries/blob/dcc674541a94ca8a54fbb5503bb75a297a5231cb/ucr.py#L30]
@@ -40,10 +44,6 @@ class DatasetImporterUCR(object):
             self.X_train = (self.X_train - mean) / math.sqrt(var)
             self.X_test = (self.X_test - mean) / math.sqrt(var)
 
-        # reshape from (batch, ts_length) to (batch, channels=1, ts_length)
-        self.X_train = np.expand_dims(self.X_train, axis=1)
-        self.X_test  = np.expand_dims(self.X_test, axis=1)
-        
         np.nan_to_num(self.X_train, copy=False)
         np.nan_to_num(self.X_test, copy=False)
 
@@ -52,8 +52,6 @@ class DatasetImporterUCR(object):
 
         print("# unique labels (train):", np.unique(self.Y_train.reshape(-1)))
         print("# unique labels (test):", np.unique(self.Y_test.reshape(-1)))
-
-
 
 
 class UCRDataset(Dataset):
@@ -100,15 +98,14 @@ class UCRDataset(Dataset):
         return self._len
 
 
-
-
 if __name__ == "__main__":
+    import os
     import matplotlib.pyplot as plt
     from torch.utils.data import DataLoader
-    cwdir = Path('C:/Users/marti/OneDrive/Dokumenter/9. semester/Prosjektoppgave/diffusion-time-series')
+    os.chdir("../")
 
     # data pipeline
-    dataset_importer = DatasetImporterUCR(cwdir, "Wafer", data_scaling=True)
+    dataset_importer = DatasetImporterUCR("Wafer", data_scaling=True)
     dataset = UCRDataset("train", dataset_importer)
     data_loader = DataLoader(dataset, batch_size=32, num_workers=0, shuffle=True)
 
@@ -117,16 +114,15 @@ if __name__ == "__main__":
         x, y = batch
         break
     print('x.shape:', x.shape)
+    print('y.shape:', y.shape)
+    print(y.flatten())
 
     # plot
-    n_samples = 5
+    n_samples = 10
     c = 0
     fig, axes = plt.subplots(n_samples, 1, figsize=(3.5, 1.7*n_samples))
     for i, ax in enumerate(axes):
         ax.plot(x[i, c])
+        ax.set_title(f'class: {y[i,0]}')
     plt.tight_layout()
     plt.show()
-
-
-
-
