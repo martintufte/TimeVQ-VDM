@@ -19,7 +19,7 @@ from utils import *
 
 def load_args():
     parser = ArgumentParser()
-    parser.add_argument('--config', type=str, help="Path to the config data  file.",
+    parser.add_argument('--config', type=str, help="Path to the config data file.",
                         default=get_root_dir().joinpath('configs', 'config.yaml'))
     return parser.parse_args()
 
@@ -53,7 +53,7 @@ def train_stage1(config: dict,
                 )
 
     # additional log
-    n_trainable_params = sum(p.numel() for p in train_exp.parameters() if p.requires_grad)
+    n_trainable_params = count_parameters(train_exp)
     wandb.log({'n_trainable_params:': n_trainable_params})
 
     # test

@@ -42,20 +42,23 @@ VQ-VAE:
   emb_dropout: 0.
   perceptual_loss_weight: 0
 
+Unet:
+    dim: 64
+    dim_mults: (1,2,4,8)
+    in_channels: 1
+    resnet_block_groups: 8
+    class_dim: 128
+    time_dim: 128
+    padding_mode: replicate
 
-MaskGIT:
-  choice_temperatures: # for masking
-    lf: 4
-    hf: 4
-  stochastic_sampling: 1  # from (Lee et al., 2022)
-  T: 10
-  prior_model:
-    hidden_dim: 256
-    n_layers: 4
-    heads: 2
-    ff_mult: 1
-    use_rmsnorm: True
-    p_unconditional: 0.2
+VDM:
+  objective: pred_noise
+  loss_type: l2
+  lr: 0.00001
+  adam_betas:
+    - 0.9
+    - 0.99
+  p_unconditional: 0.1
 
 class_guidance:
   guidance_scale: 1.

@@ -161,7 +161,6 @@ class VQVAEDecoder(nn.Module):
 
 
 if __name__ == '__main__':
-    import numpy as np
 
     x = torch.rand(1, 2, 4, 128)  # (batch, channels, height, width)
 

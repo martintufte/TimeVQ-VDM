@@ -5,13 +5,6 @@ Created on Tue Feb 28 13:51:03 2023
 @author: martigtu@stud.ntnu.no
 """
 
-###############################################################################
-#                                                                             #
-#                                   UNET                                      #
-#                                                                             #
-###############################################################################
-
-
 import math
 from functools import partial
 
@@ -22,22 +15,7 @@ import pytorch_lightning as pl
 
 from einops import rearrange, reduce
 
-
-# --- Utility functions ---
-
-def exists(x):
-    return x is not None
-
-def default(val, d):
-    if exists(val):
-        return val
-    return d() if callable(d) else d
-
-def identity(t, *args, **kwargs):
-    return t
-
-def l2norm(t):
-    return F.normalize(t, dim=-1)
+from utils import exists, default
 
 
 # --- Modules ---
@@ -86,8 +64,6 @@ def Upsample(dim, dim_out=None, size_in=None, size_out=None):
     
 
 
-
-
 class WeightStandardizedConv1d(nn.Conv1d):
     """
     https://arxiv.org/abs/1903.10520
@@ -102,29 +78,6 @@ class WeightStandardizedConv1d(nn.Conv1d):
         normalized_weight = (weight - mean) * (var + eps).rsqrt()
 
         return F.conv1d(x, normalized_weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
-
-
-
-class BLUP_Conv1d(nn.Conv1d):
-    """
-    Adding the optional padding mode "extrapolate".
-    NB! Only works for padding=1.
-    
-    This fixes end-point issues.
-    """
-    
-    def forward(self, x):
-        # BLUP for x_0 and x_{n+1}
-        pred_start = 2*x[:,:,[0]] - x[:,:,[1]]
-        pred_end   = 2*x[:,:,[-1]] - x[:,:,[-2]]
-        
-        # concatenate the estimations on the endpoints along the length dimension
-        # dim 0 is batch, dim 1 is channels
-        x = torch.cat((pred_start, x, pred_end), dim=2)
-        
-        # normal convolution on the inner part
-        return F.conv1d(x, self.weight, self.bias, self.stride, 0, self.dilation, self.groups)
-
 
 
 
@@ -300,7 +253,7 @@ class Attention(nn.Module):
         qkv = self.to_qkv(x).chunk(3, dim = 1)
         q, k, v = map(lambda t: rearrange(t, 'b (h c) x -> b h c x', h = self.heads), qkv)
 
-        q, k = map(l2norm, (q, k))
+        q, k = map(lambda t: F.normalize(t, dim=-1), (q, k))
 
         sim = einsum('b h d i, b h d j -> b h i j', q, k) * self.scale
         attn = sim.softmax(dim = -1)
@@ -313,7 +266,6 @@ class Attention(nn.Module):
 
 
 # --- Unet model ---
-
 class Unet(pl.LightningModule):
     def __init__(
         self,
@@ -327,8 +279,7 @@ class Unet(pl.LightningModule):
         learned_sinusoidal_cond = False,
         learned_sinusoidal_dim = 16,
         class_dim = 128,
-        time_dim = 128,
-        padding_mode = 'replicate'
+        time_dim = 128
     ):
         super().__init__()
         
@@ -358,7 +309,7 @@ class Unet(pl.LightningModule):
         self.emb_dim = self.time_dim + self.class_dim
         
         # padding mode
-        self.padding_mode = padding_mode
+        self.padding_mode = 'replicate'
 
 
         # --- time embeddings ---
@@ -435,17 +386,14 @@ class Unet(pl.LightningModule):
         # Hack, similar to the one used by Google Research in VDM:
         # https://github.com/google-research/vdm/blob/main/model_vdm.py
         t = t*1000
-        
         emb = self.time_emb(t)
         
-        # if class conditional: concatenate the class embeddings
         if self.class_conditional:
             if exists(y):
                 y = y.type(torch.int32)
                 class_emb = self.class_emb(y)
             else:
-                y = torch.Tensor([self.n_classes]).type(torch.int32)
-                y = y.repeat(z.shape[0]).to(self.device)
+                y = torch.Tensor([self.n_classes]).type(torch.int32).repeat(z.shape[0]).to(self.device)
                 class_emb = self.class_emb(y)
             emb = torch.concat((emb, class_emb), dim=1)
         

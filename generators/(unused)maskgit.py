@@ -10,36 +10,43 @@ from typing import Union
 
 from einops import repeat, rearrange
 from typing import Callable
-from generators.bidirectional_transformer import BidirectionalTransformer
+from generators.unet import Unet
+from generators.vdm import VDM
 
 from encoder_decoders.vq_vae_encdec import VQVAEEncoder, VQVAEDecoder
 from vector_quantization.vq import VectorQuantize
 
-from utils import compute_downsample_rate, get_root_dir, freeze, timefreq_to_time, time_to_timefreq, quantize, zero_pad_low_freq, zero_pad_high_freq
+from utils import compute_downsample_rate, get_root_dir, freeze, timefreq_to_time, time_to_timefreq, quantize, zero_pad_low_freq, zero_pad_high_freq, count_parameters
 
 
-class MaskGIT(nn.Module):
+def load_pretrained_tok_emb(pretrained_tok_emb, tok_emb, freeze_pretrained_tokens: bool):
     """
-    ref: https://github.com/dome272/MaskGIT-pytorch/blob/cff485ad3a14b6ed5f3aa966e045ea2bc8c68ad8/transformer.py#L11
+    :param pretrained_tok_emb: pretrained token embedding from stage 1
+    :param tok_emb: token embedding of the transformer
+    :return:
+    """
+    with torch.no_grad():
+        if pretrained_tok_emb != None:
+            tok_emb.weight[:-1, :] = pretrained_tok_emb
+            if freeze_pretrained_tokens:
+                tok_emb.weight[:-1, :].requires_grad = False
+
+
+class timeVQVDM(nn.Module):
+    """
+    ref: None
     """
 
     def __init__(self,
                  input_length: int,
-                 choice_temperatures: dict,
-                 stochastic_sampling: int,
-                 T: int,
                  config: dict,
                  n_classes: int,
                  **kwargs):
         super().__init__()
-        self.choice_temperature_l = choice_temperatures['lf']
-        self.choice_temperature_h = choice_temperatures['hf']
-        self.T = T
         self.config = config
         self.n_classes = n_classes
 
         self.mask_token_ids = {'LF': config['VQ-VAE']['codebook_sizes']['lf'], 'HF': config['VQ-VAE']['codebook_sizes']['hf']}
-        self.gamma = self.gamma_func("cosine")
 
         # define encoder, decoder, vq_models
         dim = config['encoder']['dim']
@@ -92,30 +99,48 @@ class MaskGIT(nn.Module):
         # pretrained discrete tokens
         embed_l = nn.Parameter(copy.deepcopy(self.vq_model_l._codebook.embed))  # pretrained discrete tokens (LF)
         embed_h = nn.Parameter(copy.deepcopy(self.vq_model_h._codebook.embed))  # pretrained discrete tokens (HF)
+        
+        codebook_sizes = config['VQ-VAE']['codebook_sizes']
+        codebook_size_l = codebook_sizes['lf']
+        codebook_size_h = codebook_sizes['hf']
+        
+        # diffusion model LF
+        unet_l = Unet(
+            ts_length    = config['VQ-VAE']['codebook_dim'],
+            n_classes    = n_classes,
+            dim          = 64,
+            dim_mults    = (1, 2, 4, 8),
+            in_channels  = codebook_size_l,
+            out_channels = codebook_size_l,
+            resnet_block_groups = config['unet']['resnet_block_groups'],
+            time_dim     = config['unet']['time_dim'],
+            class_dim    = config['unet']['class_dim']
+        )
+        print('Trainable parameters for LF:', count_parameters(unet_l))
 
-        self.transformer_l = BidirectionalTransformer('LF',
-                                                      self.num_tokens_l,
-                                                      config['VQ-VAE']['codebook_sizes'],
-                                                      config['VQ-VAE']['codebook_dim'],
-                                                      **config['MaskGIT']['prior_model'],
-                                                      n_classes=n_classes,
-                                                      pretrained_tok_emb_l=embed_l,
-                                                      )
+        diffusion_l = VDM(
+            unet_l,
+            **config['VDM']
+        )
+        
+        # diffusion model HF
+        unet_h = Unet(
+            ts_length    = config['VQ-VAE']['codebook_dim'],
+            n_classes    = n_classes,
+            dim          = 64,
+            dim_mults    = (1, 2, 4, 8),
+            in_channels  = codebook_size_h,
+            out_channels = codebook_size_h,
+            resnet_block_groups = config['unet']['resnet_block_groups'],
+            time_dim     = config['unet']['time_dim'],
+            class_dim    = config['unet']['class_dim']
+        )
+        print('Trainable parameters for HF:', count_parameters(unet_h))
 
-        self.transformer_h = BidirectionalTransformer('HF',
-                                                      self.num_tokens_h,
-                                                      config['VQ-VAE']['codebook_sizes'],
-                                                      config['VQ-VAE']['codebook_dim'],
-                                                      **config['MaskGIT']['prior_model'],
-                                                      n_classes=n_classes,
-                                                      pretrained_tok_emb_l=embed_l,
-                                                      pretrained_tok_emb_h=embed_h,
-                                                      num_tokens_l=self.num_tokens_l,
-                                                      )
-
-        # stochastic codebook sampling
-        self.vq_model_l._codebook.sample_codebook_temp = stochastic_sampling
-        self.vq_model_h._codebook.sample_codebook_temp = stochastic_sampling
+        diffusion_h = VDM(
+            unet_h,
+            **config['VDM']
+        )
 
     def load(self, model, dirname, fname):
         """

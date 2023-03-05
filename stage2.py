@@ -15,7 +15,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
 from preprocessing.preprocess_ucr import DatasetImporterUCR
 
-from experiments.exp_maskgit import ExpMaskGIT
+from experiments.exp_vqvdm import ExpVQVDM
 from evaluation.evaluation import Evaluation
 from utils import get_root_dir, load_yaml_param_settings, save_model
 
@@ -43,7 +43,7 @@ def train_stage2(config: dict,
     # fit
     n_classes = len(np.unique(train_data_loader.dataset.Y))
     input_length = train_data_loader.dataset.X.shape[-1]
-    train_exp = ExpMaskGIT(input_length, config, len(train_data_loader.dataset), n_classes)
+    train_exp = ExpVQVDM(input_length, config, len(train_data_loader.dataset), n_classes)
     wandb_logger = WandbLogger(project=project_name, name=None, config=config)
     trainer = pl.Trainer(logger=wandb_logger,
                          enable_checkpointing=False,

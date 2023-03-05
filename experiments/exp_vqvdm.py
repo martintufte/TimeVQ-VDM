@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 import torch.nn
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import wandb
@@ -30,12 +29,14 @@ class ExpVQVDM(ExpBase):
     def training_step(self, batch, batch_idx):
         x, y = batch
 
+        loss_hist = 0.0
         return loss_hist
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
         x, y = batch
         
+        loss_hist = 0.0        
         return loss_hist
 
     def configure_optimizers(self):
@@ -46,10 +47,12 @@ class ExpVQVDM(ExpBase):
     def test_step(self, batch, batch_idx):
         x, y = batch
         
+        loss = 0.0
+        prior_loss = 0.0
+        
         # log
         loss_hist = {'loss': loss,
-                     'prior_loss': prior_loss,
-                     }
+                     'prior_loss': prior_loss,}
 
         detach_the_unnecessary(loss_hist)
         return loss_hist
