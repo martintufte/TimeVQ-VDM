@@ -1,4 +1,4 @@
-name: timevqvae
+name: timevqvdm
 channels:
   - pytorch
   - nvidia
