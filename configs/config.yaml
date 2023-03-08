@@ -8,7 +8,7 @@ dataset:
   num_workers: 0
 
 exp_params:
-  LR: 0.001
+  lr: 0.001
   weight_decay: 0.00001
 
 trainer_params:
@@ -16,7 +16,7 @@ trainer_params:
     - 0
   max_epochs:
     stage1: 2000
-    stage2: 10000
+    stage2: 500
 
 
 encoder:
@@ -49,7 +49,6 @@ Unet:
     resnet_block_groups: 8
     class_dim: 128
     time_dim: 128
-    padding_mode: replicate
 
 VDM:
   objective: pred_noise

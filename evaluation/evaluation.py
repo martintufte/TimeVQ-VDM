@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 
-from generators.maskgit import MaskGIT
+from generators.timeVQVDM import VQVDM
 from preprocessing.data_pipeline import build_data_pipeline
 from preprocessing.preprocess_ucr import DatasetImporterUCR
 from generators.sample import unconditional_sample, conditional_sample
@@ -52,26 +52,26 @@ class Evaluation(object):
         assert kind in ['unconditional', 'conditional']
 
         # build
-        maskgit = MaskGIT(input_length, **self.config['MaskGIT'], config=self.config, n_classes=n_classes).to(self.device)
+        vqvdm = VQVDM(input_length, **self.config['VDM'], config=self.config, n_classes=n_classes).to(self.device)
 
         # load
         dataset_name = self.config['dataset']['dataset_name']
-        fname = f'maskgit-{dataset_name}.ckpt'
+        fname = f'vqvdm-{dataset_name}.ckpt'
         try:
             ckpt_fname = os.path.join('saved_models', fname)
-            maskgit.load_state_dict(torch.load(ckpt_fname))
+            vqvdm.load_state_dict(torch.load(ckpt_fname))
         except FileNotFoundError:
             ckpt_fname = Path(tempfile.gettempdir()).joinpath(fname)
-            maskgit.load_state_dict(torch.load(ckpt_fname))
+            vqvdm.load_state_dict(torch.load(ckpt_fname))
 
         # inference mode
-        maskgit.eval()
+        vqvdm.eval()
 
         # sampling
         if kind == 'unconditional':
-            x_new_l, x_new_h, x_new = unconditional_sample(maskgit, n_samples, self.device, batch_size=self.batch_size)  # (b c l); b=n_samples, c=1 (univariate)
+            x_new_l, x_new_h, x_new = unconditional_sample(vqvdm, n_samples, self.device, batch_size=self.batch_size)  # (b c l); b=n_samples, c=1 (univariate)
         elif kind == 'conditional':
-            x_new_l, x_new_h, x_new = conditional_sample(maskgit, n_samples, self.device, class_index, self.batch_size)  # (b c l); b=n_samples, c=1 (univariate)
+            x_new_l, x_new_h, x_new = conditional_sample(vqvdm, n_samples, self.device, class_index, self.batch_size)  # (b c l); b=n_samples, c=1 (univariate)
         else:
             raise ValueError
 

@@ -6,12 +6,13 @@ Created on Tue Feb 28 13:51:03 2023
 """
 
 
-from generators.unet_lightning import Unet
+from generators.unet import Unet
 
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.optim import Adam
+from torch import nn
 
 from einops import reduce
 from math import pi, prod
@@ -24,7 +25,9 @@ from utils import exists, default
 class VDM(pl.LightningModule):
     def __init__(
         self,
+        kind : str,
         model : Unet,
+        num_tokens_l : int        = None,
         objective : str           = 'pred_noise',
         loss_type : str           = 'l2',
         lr : float                = 1e-5,
@@ -34,27 +37,37 @@ class VDM(pl.LightningModule):
         super().__init__()
         
         # --- assert inputs ---
+        assert kind in {'LF', 'HF'}, 'kind must be either LF or HF'
         assert loss_type in {'l1', 'l2'}, 'loss_type must be either l1 or l2'
         assert objective in {'pred_noise', 'pred_x', 'pred_v'}, f'objective {objective} is not supported'
         
         # --- architecture ---
+        self.kind           = kind                             # High-freq or low-freq diffusion model
         self.model          = model                            # Unet model
-        self.channels       = model.in_channels                # number of input channels
-        self.ts_length      = model.ts_length                  # time series length
+        self.channels       = model.in_channels                # number of input channels (!= n_tokens)
+        self.ts_length      = model.ts_length                  # time series length (= dim of codebooks)
+        self.n_classes      = model.n_classes                  # number of classes
         self.loss_type      = loss_type                        # loss type
         self.objective      = objective                        # prediction objective
         self.lr             = lr                               # learning rate
         self.adam_betas     = adam_betas                       # adam parameters
-        self.p_unconditional= p_unconditional                  # conditional dorpout parameter
+        self.p_unconditional= p_unconditional                  # unconditional probability
         self.loss_fn        = {'l1': F.l1_loss, 'l2': F.mse_loss}[self.loss_type]
-    
-    
+        
+        # --- High-frequency model only ---
+        if self.kind == 'HF':
+            assert exists(num_tokens_l), 'the number of tokens for the LF model must be given'
+            
+            self.tok_emb_l = nn.Embedding(32, 64) # 32 = codebook size for LF, 64 = embedding dimension for HF
+            
+            
     # --- Variance schedule ---
     def alpha(self, t):
         return torch.cos(t * pi/2).view(-1,1,1).to(self.device)
     
     def sigma(self, t):
         return torch.sin(t * pi/2).view(-1,1,1).to(self.device)
+    
     
     
     # --- Forward diffusion process ---
@@ -162,7 +175,7 @@ class VDM(pl.LightningModule):
 
 
     @torch.no_grad()
-    def p_sample(self, z, s, t, condition=None, guidance_weight=1.0):
+    def p_sample(self, z, s, t, condition : Union[None, torch.Tensor] = None, guidance_weight : int = 1.0):
         """
         single sample loop p_theta(z_s | z_t)
         """
@@ -195,10 +208,14 @@ class VDM(pl.LightningModule):
 
 
     @torch.no_grad()
-    def sample(self, n_samples=1, sampling_steps=16, condition=None, guidance_weight=1.0):
+    def sample(self, n_samples=1, sampling_steps=16, class_condition : Union[None, int, torch.Tensor] = None, guidance_weight : int = 1.0):
         """ 
         Ancestral sampling from the diffusion model
         """
+        assert n_samples == int and n_samples > 0, 'Number of samples must be a positive integer!'
+        
+        if type(class_condition) == int:
+            class_condition = torch.full((1, n_samples), class_condition, device=self.device)
         
         # time discretization
         tau = torch.linspace(1, 0, sampling_steps+1, device=self.device).view(-1,1)
@@ -206,14 +223,15 @@ class VDM(pl.LightningModule):
         # sample from prior N(0, I)
         z = torch.randn((n_samples, self.channels, self.ts_length), device=self.device)
         
-        # sample from p_theta(z_s | z_t, t, condition)
+        # sample from p_theta(z_s | z_t, t, class_condition)
         for s, t in tqdm(zip(tau[1:], tau[:-1]), desc='Sampling', total=sampling_steps):
-            z, _ = self.p_sample(z, s, t, condition, guidance_weight)
+            z, _ = self.p_sample(z, s, t, class_condition, guidance_weight)
             
         return z
     
 
     # --- Training ---
+    @torch.no_grad()
     def quasi_rand(self, shape : Union[int, tuple] = 1):
         '''
         return a quasi uniform distribution on [0, 1].
@@ -274,81 +292,29 @@ class VDM(pl.LightningModule):
 
     
     # --- Overwriting PyTorch Lightning in-build methods ---
-    def forward(self, x, *args, **kwargs):
-        print('This is not how the variational diffusion model should be used! \
-               Use the sample method instead!')
-               
-        '''
-        def forward_lf(self, embed_ind_l, class_condition: Union[None, torch.Tensor] = None):
-            device = embed_ind_l.device
-
-            token_embeddings = self.tok_emb_l(embed_ind_l)  # (b n dim)
-            cls_emb = self.class_embedding(class_condition, embed_ind_l.shape[0], device)  # (b 1 dim)
-
-            n = token_embeddings.shape[1]
-            position_embeddings = self.pos_emb.weight[:n, :]
-            embed = self.drop(self.ln(token_embeddings + position_embeddings))  # (b, n, dim)
-            embed = torch.cat((cls_emb, embed), dim=1)  # (b, 1+n, dim)
-            embed = self.blocks(embed)  # (b, 1+n, dim)
-            embed = self.Token_Prediction(embed)[:, 1:, :]  # (b, n, dim)
-
-            logits = torch.matmul(embed, self.tok_emb_l.weight.T) + self.bias  # (b, n, codebook_size+1)
-            logits = logits[:, :, :-1]  # remove the logit for the mask token.  # (b, n, codebook_size)
-            return logits
-
-        def forward_hf(self, embed_ind_l, embed_ind_h, class_condition=None):
-            """
-            embed_ind_l (b n)
-            embed_ind_h (b m); m > n
-            """
-            device = embed_ind_l.device
-
-            token_embeddings_l = self.tok_emb_l(embed_ind_l)  # (b n dim)
-            token_embeddings_l = self.projector(token_embeddings_l)  # (b m dim)
-            token_embeddings_h = self.tok_emb_h(embed_ind_h)  # (b m dim)
-            token_embeddings = torch.cat((token_embeddings_l, token_embeddings_h), dim=-1)  # (b m 2*dim)
-            cls_emb = self.class_embedding(class_condition, embed_ind_l.shape[0], device)  # (b 1 2*dim)
-
-            n = token_embeddings.shape[1]
-            position_embeddings = self.pos_emb.weight[:n, :]
-            embed = self.drop(self.ln(token_embeddings + position_embeddings))  # (b, m, 2*dim)
-            embed = torch.cat((cls_emb, embed), dim=1)  # (b, 1+m, 2*dim)
-            embed = self.blocks(embed)  # (b, 1+m, 2*dim)
-            embed = self.Token_Prediction(embed)[:, 1:, :]  # (b, m, dim)
-
-            logits = torch.matmul(embed, self.tok_emb_h.weight.T) + self.bias  # (b, m, codebook_size+1)
-            logits = logits[:, :, :-1]  # remove the logit for the mask token.  # (b, m, codebook_size)
-            return logits
-
-        def forward(self, embed_ind_l, embed_ind_h=None, class_condition: Union[None, torch.Tensor] = None):
-            """
-            embed_ind: indices for embedding; (b n)
-            class_condition: (b 1); if None, unconditional sampling is operated.
-            """
-            if self.kind == 'LF':
-                logits = self.forward_lf(embed_ind_l, class_condition)
-            elif self.kind == 'HF':
-                logits = self.forward_hf(embed_ind_l, embed_ind_h, class_condition)
-            else:
-                raise ValueError
-            return logits
+    def forward(self, X, Y, embed_ind_l = None, *args, **kwargs):
+        Y = Y.flatten() # nescessary if Y is 2D
         
-        '''
+        t = self.quasi_rand(X.shape[0])
         
-        return x
+        if self.kind=='HF' and exists(embed_ind_l):
+            token_embeddings_l = self.tok_emb_l(embed_ind_l)  # (B C N)
+            
+            # TODO: Incorporate these token embeddings!!!
+            
+        loss = self.p_losses(X, t, Y)
+        
+        
+        return loss
         
     
     def training_step(self, batch, batch_idx):
         X, Y = batch
         Y = Y.flatten() # nescessary if Y is 2D
         
-        t = torch.rand([X.shape[0]], device=self.device)
+        t = self.quasi_rand(X.shape[0])
         loss = self.p_losses(X, t, Y)
         self.log("train/loss", loss)
-        
-        # update number of classes seen
-        self.n_samples_seen = self.n_samples_seen.to(self.device)
-        self.n_samples_seen += torch.bincount(Y, minlength=self.model.n_classes)
         
         return loss
 
@@ -357,7 +323,7 @@ class VDM(pl.LightningModule):
         X, Y = batch
         Y = Y.flatten() # nescessary if Y is 2D
         
-        t = torch.rand([X.shape[0]], device=self.device)
+        t = self.quasi_rand(X.shape[0])
         val_loss = self.p_losses(X, t, Y)
         self.log("val/loss", val_loss)
         

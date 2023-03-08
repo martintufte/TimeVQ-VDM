@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import math
 from pathlib import Path
 import tempfile
 from typing import Union
@@ -105,42 +104,46 @@ class VQVDM(nn.Module):
         codebook_size_h = codebook_sizes['hf']
         
         # diffusion model LF
-        unet_l = Unet(
+        self.unet_l = Unet(
             ts_length    = config['VQ-VAE']['codebook_dim'],
             n_classes    = n_classes,
             dim          = 64,
-            dim_mults    = (1, 2, 4, 8),
-            in_channels  = codebook_size_l,
-            out_channels = codebook_size_l,
-            resnet_block_groups = config['unet']['resnet_block_groups'],
-            time_dim     = config['unet']['time_dim'],
-            class_dim    = config['unet']['class_dim']
+            dim_mults    = (1,),
+            in_channels  = 64,#self.num_tokens_l,
+            out_channels = 64,#self.num_tokens_l,
+            resnet_block_groups = config['Unet']['resnet_block_groups'],
+            time_dim     = config['Unet']['time_dim'],
+            class_dim    = config['Unet']['class_dim']
         )
-        print('Trainable parameters for LF:', count_parameters(unet_l))
+        print('Trainable parameters for LF:', count_parameters(self.unet_l))
 
-        diffusion_l = VDM(
-            unet_l,
+        self.diffusion_l = VDM(
+            kind = 'LF',
+            model = self.unet_l,
             **config['VDM']
         )
         
         # diffusion model HF
-        unet_h = Unet(
+        self.unet_h = Unet(
             ts_length    = config['VQ-VAE']['codebook_dim'],
             n_classes    = n_classes,
             dim          = 64,
-            dim_mults    = (1, 2, 4, 8),
-            in_channels  = codebook_size_h,
-            out_channels = codebook_size_h,
-            resnet_block_groups = config['unet']['resnet_block_groups'],
-            time_dim     = config['unet']['time_dim'],
-            class_dim    = config['unet']['class_dim']
+            dim_mults    = (1, 2, 4),
+            in_channels  = 64,#self.num_tokens_h,
+            out_channels = 64,#self.num_tokens_h,
+            resnet_block_groups = config['Unet']['resnet_block_groups'],
+            time_dim     = config['Unet']['time_dim'],
+            class_dim    = config['Unet']['class_dim']
         )
-        print('Trainable parameters for HF:', count_parameters(unet_h))
+        print('Trainable parameters for HF:', count_parameters(self.unet_h))
 
-        diffusion_h = VDM(
-            unet_h,
-            **config['VDM']
+        self.diffusion_h = VDM(
+            kind = 'HF',
+            model = self.unet_h,
+            num_tokens_l = self.num_tokens_l,
+            **config['VDM'],
         )
+
 
     def load(self, model, dirname, fname):
         """
@@ -153,6 +156,7 @@ class VQVDM(nn.Module):
             dirname = Path(tempfile.gettempdir())
             model.load_state_dict(torch.load(dirname.joinpath(fname)))
 
+
     @torch.no_grad()
     def encode_to_z_q(self, x, encoder: VQVAEEncoder, vq_model: VectorQuantize, spectrogram_padding: Callable = None):
         """
@@ -164,6 +168,7 @@ class VQVDM(nn.Module):
             xf = spectrogram_padding(xf)
         z = encoder(xf)  # (b c h w)
         z_q, indices, vq_loss, perplexity = quantize(z, vq_model)  # (b c h w), (b (h w) h), ...
+        
         return z_q, indices
 
 
@@ -173,33 +178,49 @@ class VQVDM(nn.Module):
         y: (B, 1)
         """
         
+        z_l, s_l = self.encode_to_z_q(x, self.encoder_l, self.vq_model_l, zero_pad_high_freq)  # (B C H W)
+        z_h, _ = self.encode_to_z_q(x, self.encoder_h, self.vq_model_h, zero_pad_low_freq)  # (B C H W)
         
-        return 0.
+        # combine height and width of z_l
+        z_l = torch.flatten(z_l, start_dim=-2) # (B C H*W)
+        z_h = torch.flatten(z_h, start_dim=-2) # (B C H*W)
+        
+        # LF loss
+        loss_l = self.diffusion_l(z_l, y)
+        
+        # HF loss
+        loss_h = self.diffusion_h(z_h, y, s_l)
+        
+        
+        return (loss_l, loss_h)
 
 
     def first_pass(self,
-                   s_l: torch.Tensor,
-                   unknown_number_in_the_beginning_l,
-                   class_condition: Union[torch.Tensor, None],
-                   guidance_scale: float,
-                   gamma: Callable,
-                   device):
+                   n_samples: int = 1,
+                   sampling_steps: int = 16,
+                   class_condition: Union[None, int, torch.Tensor] = None,
+                   guidance_scale: float = 1.0,
+                   ):
         
-        
-        return s_l
+        z_l = self.diffusion_l.sample(n_samples, sampling_steps, class_condition, guidance_scale)        
+  
+        return z_l
 
     def second_pass(self,
                     s_l: torch.Tensor,
-                    s_h: torch.Tensor,
-                    unknown_number_in_the_beginning_h,
-                    class_condition: Union[torch.Tensor, None],
-                    guidance_scale: float,
-                    gamma: Callable,
-                    device):
+                    n_samples: int = 1,
+                    sampling_steps: int = 16,
+                    class_condition: Union[None, int, torch.Tensor] = None,
+                    guidance_scale: float = 1.0,
+                    ):
         
+        # TODO: Include z_l
         
-        return s_h
-
+        z_h = self.diffusion_h.sample(n_samples, sampling_steps, class_condition, guidance_scale)
+        
+        return z_h
+    
+    
     def decode_token_ind_to_timeseries(self, s: torch.Tensor, frequency: str, return_representations: bool = False):
         """
         It takes token embedding indices and decodes them to time series.

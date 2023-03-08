@@ -17,7 +17,7 @@ from preprocessing.preprocess_ucr import DatasetImporterUCR
 
 from experiments.exp_vqvdm import ExpVQVDM
 from evaluation.evaluation import Evaluation
-from utils import get_root_dir, load_yaml_param_settings, save_model
+from utils import get_root_dir, load_yaml_param_settings, save_model, count_parameters
 
 
 def load_args():
@@ -36,7 +36,7 @@ def train_stage2(config: dict,
     """
     :param do_validate: if True, validation is conducted during training with a test dataset.
     """
-    project_name = 'TimeVQVAE-stage2'
+    project_name = 'TimeVQVDM-stage2'
     if wandb_project_case_idx != '':
         project_name += f'-{wandb_project_case_idx}'
 
@@ -57,14 +57,15 @@ def train_stage2(config: dict,
                 )
 
     # additional log
-    n_trainable_params = sum(p.numel() for p in train_exp.parameters() if p.requires_grad)
+    n_trainable_params = count_parameters(train_exp)
     wandb.log({'n_trainable_params:': n_trainable_params})
 
     print('saving the model...')
-    save_model({'maskgit': train_exp.maskgit}, id=config['dataset']['dataset_name'])
+    save_model({'vqvdm': train_exp.vqvdm}, id=config['dataset']['dataset_name'])
 
     # test
     print('evaluating...')
+    '''
     input_length = train_data_loader.dataset.X.shape[-1]
     n_classes = len(np.unique(train_data_loader.dataset.Y))
     evaluation = Evaluation(config['dataset']['dataset_name'], config['trainer_params']['gpus'][0], config)
@@ -80,6 +81,7 @@ def train_stage2(config: dict,
     evaluation.log_visual_inspection(min(200, evaluation.X_test.shape[0]), x_gen)
     evaluation.log_pca(min(1000, evaluation.X_test.shape[0]), x_gen, z_test, z_gen)
     evaluation.log_tsne(min(1000, evaluation.X_test.shape[0]), x_gen, z_test, z_gen)
+    '''
     wandb.finish()
 
 
