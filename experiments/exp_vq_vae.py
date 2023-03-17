@@ -193,13 +193,13 @@ class ExpVQVAE(ExpBase):
         return loss_hist
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW([{'params': self.encoder_l.parameters(), 'lr': self.config['exp_params']['LR']},
-                                 {'params': self.decoder_l.parameters(), 'lr': self.config['exp_params']['LR']},
-                                 {'params': self.vq_model_l.parameters(), 'lr': self.config['exp_params']['LR']},
+        opt = torch.optim.AdamW([{'params': self.encoder_l.parameters(), 'lr': self.config['exp_params']['lr']},
+                                 {'params': self.decoder_l.parameters(), 'lr': self.config['exp_params']['lr']},
+                                 {'params': self.vq_model_l.parameters(), 'lr': self.config['exp_params']['lr']},
 
-                                 {'params': self.encoder_h.parameters(), 'lr': self.config['exp_params']['LR']},
-                                 {'params': self.decoder_h.parameters(), 'lr': self.config['exp_params']['LR']},
-                                 {'params': self.vq_model_h.parameters(), 'lr': self.config['exp_params']['LR']},
+                                 {'params': self.encoder_h.parameters(), 'lr': self.config['exp_params']['lr']},
+                                 {'params': self.decoder_h.parameters(), 'lr': self.config['exp_params']['lr']},
+                                 {'params': self.vq_model_h.parameters(), 'lr': self.config['exp_params']['lr']},
                                  ],
                                 weight_decay=self.config['exp_params']['weight_decay'])
         return {'optimizer': opt, 'lr_scheduler': CosineAnnealingLR(opt, self.T_max)}

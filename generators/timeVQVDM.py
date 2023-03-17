@@ -6,6 +6,8 @@ import numpy as np
 from pathlib import Path
 import tempfile
 from typing import Union
+from tqdm import tqdm
+from math import floor
 
 from einops import repeat, rearrange
 from typing import Callable
@@ -15,7 +17,7 @@ from generators.vdm import VDM
 from encoder_decoders.vq_vae_encdec import VQVAEEncoder, VQVAEDecoder
 from vector_quantization.vq import VectorQuantize
 
-from utils import compute_downsample_rate, get_root_dir, freeze, timefreq_to_time, time_to_timefreq, quantize, zero_pad_low_freq, zero_pad_high_freq, count_parameters
+from utils import compute_downsample_rate, get_root_dir, freeze, timefreq_to_time, time_to_timefreq, quantize, zero_pad_low_freq, zero_pad_high_freq, count_parameters, StandardScaler
 
 
 def load_pretrained_tok_emb(pretrained_tok_emb, tok_emb, freeze_pretrained_tokens: bool):
@@ -99,18 +101,25 @@ class VQVDM(nn.Module):
         embed_l = nn.Parameter(copy.deepcopy(self.vq_model_l._codebook.embed))  # pretrained discrete tokens (LF)
         embed_h = nn.Parameter(copy.deepcopy(self.vq_model_h._codebook.embed))  # pretrained discrete tokens (HF)
         
-        codebook_sizes = config['VQ-VAE']['codebook_sizes']
-        codebook_size_l = codebook_sizes['lf']
-        codebook_size_h = codebook_sizes['hf']
+        #codebook_sizes = config['VQ-VAE']['codebook_sizes']
+        #codebook_size_l = codebook_sizes['lf']
+        #codebook_size_h = codebook_sizes['hf']
+        
+        # scaler for codebooks
+        self.scaler_l = StandardScaler().fit(embed_l)
+        self.scaler_h = StandardScaler().fit(embed_h)
+        
+        self.embed_l = embed_l
+        self.embed_h = embed_h
         
         # diffusion model LF
         self.unet_l = Unet(
-            ts_length    = config['VQ-VAE']['codebook_dim'],
+            ts_length    = config['encoder']['downsampled_width']['lf'],
             n_classes    = n_classes,
             dim          = 64,
-            dim_mults    = (1,),
-            in_channels  = 64,#self.num_tokens_l,
-            out_channels = 64,#self.num_tokens_l,
+            dim_mults    = (1, ),
+            in_channels  = config['VQ-VAE']['codebook_dim'] * 5,
+            out_channels = config['VQ-VAE']['codebook_dim'] * 5,
             resnet_block_groups = config['Unet']['resnet_block_groups'],
             time_dim     = config['Unet']['time_dim'],
             class_dim    = config['Unet']['class_dim']
@@ -120,17 +129,18 @@ class VQVDM(nn.Module):
         self.diffusion_l = VDM(
             kind = 'LF',
             model = self.unet_l,
+            scaler = self.scaler_l,
             **config['VDM']
         )
         
         # diffusion model HF
         self.unet_h = Unet(
-            ts_length    = config['VQ-VAE']['codebook_dim'],
+            ts_length    = config['encoder']['downsampled_width']['hf'],
             n_classes    = n_classes,
             dim          = 64,
             dim_mults    = (1, 2, 4),
-            in_channels  = 64,#self.num_tokens_h,
-            out_channels = 64,#self.num_tokens_h,
+            in_channels  = config['VQ-VAE']['codebook_dim'] * 5,
+            out_channels = config['VQ-VAE']['codebook_dim'] * 5,
             resnet_block_groups = config['Unet']['resnet_block_groups'],
             time_dim     = config['Unet']['time_dim'],
             class_dim    = config['Unet']['class_dim']
@@ -140,6 +150,7 @@ class VQVDM(nn.Module):
         self.diffusion_h = VDM(
             kind = 'HF',
             model = self.unet_h,
+            scaler = self.scaler_h,
             num_tokens_l = self.num_tokens_l,
             **config['VDM'],
         )
@@ -164,90 +175,149 @@ class VQVDM(nn.Module):
         """
         C = x.shape[1]
         xf = time_to_timefreq(x, self.n_fft, C)  # (B, C, H, W)
+        
         if spectrogram_padding is not None:
             xf = spectrogram_padding(xf)
+            
         z = encoder(xf)  # (b c h w)
         z_q, indices, vq_loss, perplexity = quantize(z, vq_model)  # (b c h w), (b (h w) h), ...
         
         return z_q, indices
 
 
-    def forward(self, x, y):
+    def forward(self, x, y, verbose=False):
         """
         x: (B, C, L)
         y: (B, 1)
         """
         
-        z_l, s_l = self.encode_to_z_q(x, self.encoder_l, self.vq_model_l, zero_pad_high_freq)  # (B C H W)
-        z_h, _ = self.encode_to_z_q(x, self.encoder_h, self.vq_model_h, zero_pad_low_freq)  # (B C H W)
-        
-        # combine height and width of z_l
-        z_l = torch.flatten(z_l, start_dim=-2) # (B C H*W)
-        z_h = torch.flatten(z_h, start_dim=-2) # (B C H*W)
-        
-        # LF loss
-        loss_l = self.diffusion_l(z_l, y)
-        
-        # HF loss
-        loss_h = self.diffusion_h(z_h, y, s_l)
-        
-        
-        return (loss_l, loss_h)
+        if verbose:
+            B, C, L = x.shape 
+            
+            # STFT
+            u = time_to_timefreq(x, self.n_fft, C) # (B C=2 H W)
+            
+            # zero-pad
+            u_l = zero_pad_high_freq(u) # (B C=2 H=5 W)
+            u_h = zero_pad_low_freq(u) # (B C=2 H=5 W)
+            
+            # encode
+            z_l = self.encoder_l(u_l)  # (B C H W)
+            z_h = self.encoder_h(u_h) # (B C H W)
+            
+            # combine height and width of z_l
+            z_l_star = torch.flatten(z_l, start_dim=-2) # (B C H*W)
+            z_h_star = torch.flatten(z_h, start_dim=-2) # (B C H*W)
+
+            # quantize            
+            z_l_q, s_l, _, _ = quantize(z_l, self.vq_model_l)
+            z_h_q, s_h, _, _ = quantize(z_h, self.vq_model_h)
+            
+            # decode
+            u_l_hat = self.decoder_l(z_l_q)
+            u_h_hat = self.decoder_h(z_h_q)
+            
+            # zero-pad
+            x_l_hat = zero_pad_high_freq(u_l_hat)
+            x_h_hat = zero_pad_high_freq(u_h_hat)
+            
+            # inverse STFT
+            x_l_hat = timefreq_to_time(u_l_hat, self.n_fft, self.config['dataset']['in_channels'])
+            x_h_hat = timefreq_to_time(u_h_hat, self.n_fft, self.config['dataset']['in_channels'])
+            
+            # Print shapes
+            print('x shape:', x.shape)
+            print('u shape:', u.shape)
+            print('u_l shape:', u_l.shape)
+            print('u_h shape:', u_h.shape)
+            print('z_l shape:', z_l.shape)
+            print('z_h shape:', z_h.shape)
+            print('z_l_star shape:', z_l_star.shape)
+            print('z_h_star shape:', z_h_star.shape)
+            print('u_l_hat shape:', u_l_hat.shape)
+            print('u_h_hat shape:', u_h_hat.shape)
+            print('x_l_hat shape:', x_l_hat.shape)
+            print('x_h_hat shape:', x_h_hat.shape)
+            
+            
+            return x, u, u_l, u_h, z_l, z_h, u_l_hat, u_h_hat, x_l_hat, x_h_hat
 
 
-    def first_pass(self,
-                   n_samples: int = 1,
-                   sampling_steps: int = 16,
-                   class_condition: Union[None, int, torch.Tensor] = None,
-                   guidance_scale: float = 1.0,
-                   ):
-        
-        z_l = self.diffusion_l.sample(n_samples, sampling_steps, class_condition, guidance_scale)        
-  
-        return z_l
-
-    def second_pass(self,
-                    s_l: torch.Tensor,
-                    n_samples: int = 1,
-                    sampling_steps: int = 16,
-                    class_condition: Union[None, int, torch.Tensor] = None,
-                    guidance_scale: float = 1.0,
-                    ):
-        
-        # TODO: Include z_l
-        
-        z_h = self.diffusion_h.sample(n_samples, sampling_steps, class_condition, guidance_scale)
-        
-        return z_h
-    
-    
-    def decode_token_ind_to_timeseries(self, s: torch.Tensor, frequency: str, return_representations: bool = False):
-        """
-        It takes token embedding indices and decodes them to time series.
-        :param s: token embedding index
-        :param frequency:
-        :param return_representations:
-        :return:
-        """
-        assert frequency in ['LF', 'HF']
-
-        vq_model = self.vq_model_l if frequency == 'LF' else self.vq_model_h
-        decoder = self.decoder_l if frequency == 'LF' else self.decoder_h
-        zero_pad = zero_pad_high_freq if frequency == 'LF' else zero_pad_low_freq
-
-        quantize = F.embedding(s, vq_model._codebook.embed)  # (b n d)
-        quantize = vq_model.project_out(quantize)  # (b n c)
-        quantize = rearrange(quantize, 'b n c -> b c n')  # (b c n) == (b c (h w))
-        H_prime = self.H_prime_l if frequency == 'LF' else self.H_prime_h
-        W_prime = self.W_prime_l if frequency == 'LF' else self.W_prime_h
-        quantize = rearrange(quantize, 'b c (h w) -> b c h w', h=H_prime, w=W_prime)
-
-        xfhat = decoder(quantize)
-
-        uhat = zero_pad(xfhat)
-        xhat = timefreq_to_time(uhat, self.n_fft, self.config['dataset']['in_channels'])  # (B, C, L)
-
-        if return_representations:
-            return xhat, quantize
         else:
-            return xhat
+            z_l, s_l = self.encode_to_z_q(x, self.encoder_l, self.vq_model_l, zero_pad_high_freq)  # (B C H W)
+            z_h, s_h = self.encode_to_z_q(x, self.encoder_h, self.vq_model_h, zero_pad_low_freq)  # (B C H W)
+            
+            # combine height and width of z_l
+            #z_l = torch.flatten(z_l, start_dim=-2) # (B C H*W)
+            #z_h = torch.flatten(z_h, start_dim=-2) # (B C H*W)
+            
+            # combine height with channels
+            z_l = rearrange(z_l, 'B C H W -> B (C H) W')
+            z_h = rearrange(z_h, 'B C H W -> B (C H) W')
+            
+            # LF loss
+            loss_l = self.diffusion_l(z_l, y)
+            
+            # HF loss
+            loss_h = self.diffusion_h(z_h, y, s_l)
+        
+            
+            return (loss_l, loss_h)
+    
+    
+    def vq_distr(self, x, y):
+        B, C, L = x.shape 
+        
+        # STFT
+        u = time_to_timefreq(x, self.n_fft, C) # (B C=2 H W)
+        
+        # zero-pad
+        u_l = zero_pad_high_freq(u) # (B C=2 H=5 W)
+        u_h = zero_pad_low_freq(u) # (B C=2 H=5 W)
+        
+        # encode
+        z_l = self.encoder_l(u_l)  # (B C H W)
+        z_h = self.encoder_h(u_h) # (B C H W)
+        
+        # quantize            
+        z_l_q, s_l, _, _ = quantize(z_l, self.vq_model_l)
+        z_h_q, s_h, _, _ = quantize(z_h, self.vq_model_h)
+        
+        
+        return z_l_q, z_h_q
+        
+    
+
+    def sample(self, n_samples: int, class_index=None, batch_size=256, guidance_scale=1.):
+        n_iters = floor(n_samples/batch_size)
+        sampling_steps = 100
+        
+        X_l, X_h = [], []
+        
+        for i in tqdm(range(0, n_samples, batch_size), desc='Sampling:', total = n_iters):
+            b = batch_size if i + batch_size <= n_samples else n_samples - i
+            
+            # sample LF part
+            z_l = self.diffusion_l.sample(b, sampling_steps, class_index, guidance_scale) # (B C (H W))
+            z_l = rearrange(z_l, 'b (c h) w -> b c h w', h=5)
+            z_l_q, embed_ind_l, _, _ = quantize(z_l, self.vq_model_l)
+            u_l = zero_pad_high_freq(self.decoder_l(z_l_q))
+            x_l = timefreq_to_time(u_l, self.n_fft, self.config['dataset']['in_channels'])  # (B, C, L)
+
+            # sample HF part
+            z_h = self.diffusion_h.sample(b, sampling_steps, class_index, guidance_scale) # (B C (H W))
+            z_h = rearrange(z_h, 'b (c h) w -> b c h w', h=5)
+            z_h_q, embed_ind_h, _, _ = quantize(z_h, self.vq_model_h)
+            u_h = zero_pad_high_freq(self.decoder_h(z_h_q))
+            x_h = timefreq_to_time(u_h, self.n_fft, self.config['dataset']['in_channels'])  # (B, C, L)
+            
+            # append batch
+            X_l.append(x_l)
+            X_h.append(x_h)
+    
+    
+        X_l = torch.cat(X_l)
+        X_h = torch.cat(X_h)
+    
+        return X_l, X_h
+

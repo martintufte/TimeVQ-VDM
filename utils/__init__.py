@@ -13,6 +13,8 @@ from pathlib import Path
 from sklearn.preprocessing import MinMaxScaler
 
 
+# --- utility ---
+
 def exists(x):
     return x is not None
 
@@ -27,9 +29,7 @@ def identity(t, *args, **kwargs):
     return t
 
 
-def count_parameters(model):
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
+# --- config/preprosessing ---
 
 def get_root_dir():
     return Path(__file__).parent.parent
@@ -192,6 +192,12 @@ class BatchSlidingWindow(object):
             yield tuple(a[idx] if len(a.shape) == 1 else a[idx, :] for a in arrays)
 
 
+# --- model ---
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 def freeze(model):
     for param in model.parameters():
         param.requires_grad = False
@@ -227,6 +233,8 @@ def save_model(models_dict: dict, dirname='saved_models', id: str = ''):
             torch.save(model.state_dict(), get_root_dir().joinpath(dirname, model_name + id_ + '.ckpt'))
 
 
+### --- time/timefreq ---
+
 def time_to_timefreq(x, n_fft: int, C: int):
     """
     x: (B, C, L)
@@ -243,6 +251,39 @@ def timefreq_to_time(x, n_fft: int, C: int):
     x = rearrange(x, '(b c) l -> b c l', c=C)
     return x
 
+def zero_pad_high_freq(xf):
+    """
+    xf: (B, C, H, W); H: frequency-axis, W: temporal-axis
+    """
+    xf_l = torch.zeros(xf.shape).to(xf.device)
+    xf_l[:, :, 0, :] = xf[:, :, 0, :]
+    return xf_l
+
+
+def zero_pad_low_freq(xf):
+    """
+    xf: (B, C, H, W); H: frequency-axis, W: temporal-axis
+    """
+    xf_h = torch.zeros(xf.shape).to(xf.device)
+    xf_h[:, :, 1:, :] = xf[:, :, 1:, :]
+    return xf_h
+
+
+def split_signal(x, n_fft: int = 8, C: int = 1):
+    """
+    Split the signal into its low and high-frequency parts.
+    x : (B, C, L)
+    """
+    xf = time_to_timefreq(x, n_fft, C)
+    xf_l = zero_pad_high_freq(xf)
+    xf_h = zero_pad_low_freq(xf)
+    x_l = timefreq_to_time(xf_l, n_fft, C)
+    x_h = timefreq_to_time(xf_h, n_fft, C)
+    
+    return xf, xf_l, xf_h, x_l, x_h
+
+
+# --- quantization ---
 
 def compute_var_loss(z):
     return torch.relu(1. - torch.sqrt(z.var(dim=0) + 1e-4)).mean()
@@ -276,23 +317,6 @@ def quantize(z, vq_model, transpose_channel_length_axes=False):
     return z_q, indices, vq_loss, perplexity
 
 
-def zero_pad_high_freq(xf):
-    """
-    xf: (B, C, H, W); H: frequency-axis, W: temporal-axis
-    """
-    xf_l = torch.zeros(xf.shape).to(xf.device)
-    xf_l[:, :, 0, :] = xf[:, :, 0, :]
-    return xf_l
-
-
-def zero_pad_low_freq(xf):
-    """
-    xf: (B, C, H, W); H: frequency-axis, W: temporal-axis
-    """
-    xf_h = torch.zeros(xf.shape).to(xf.device)
-    xf_h[:, :, 1:, :] = xf[:, :, 1:, :]
-    return xf_h
-
 def compute_emb_loss(codebook, x, use_cosine_sim, esm_max_codes):
     embed = codebook.embed
     flatten = x.reshape(-1, x.shape[-1])
@@ -315,7 +339,37 @@ def compute_emb_loss(codebook, x, use_cosine_sim, esm_max_codes):
     return esm_loss
 
 
-def compute_downsample_rate(input_length: int,
-                            n_fft: int,
-                            downsampled_width: int):
+def compute_downsample_rate(input_length: int, n_fft: int, downsampled_width: int):
     return round(input_length / (np.log2(n_fft) - 1) / downsampled_width) if input_length >= downsampled_width else 1
+
+
+# --- StandardScaler, inspiration: https://gist.github.com/farahmand-m/8a416f33a27d73a149f92ce4708beb40 ---
+
+class StandardScaler:
+    def __init__(self, mean=None, std=None, epsilon=1e-7):
+        """Standard Scaler.
+        The class can be used to normalize PyTorch Tensors using native functions. The module does not expect the
+        tensors to be of any specific shape; as long as the features are the last dimension in the tensor, the module
+        will work fine.
+        :param mean: The mean of the features. The property will be set after a call to fit.
+        :param std: The standard deviation of the features. The property will be set after a call to fit.
+        :param epsilon: Used to avoid a Division-By-Zero exception.
+        """
+        self.mean = mean
+        self.std = std
+        self.epsilon = epsilon
+
+    def fit(self, values):
+        dims = list(range(values.dim() - 1))
+        self.mean = torch.mean(values, dim=dims)
+        self.std = torch.std(values, dim=dims)
+
+    def transform(self, values):
+        return (values - self.mean) / (self.std + self.epsilon)
+
+    def fit_transform(self, values):
+        self.fit(values)
+        return self.transform(values)
+    
+    def inverse_transform(self, values):
+        return (self.std + self.epsilon) * values + self.mean

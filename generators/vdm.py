@@ -7,6 +7,7 @@ Created on Tue Feb 28 13:51:03 2023
 
 
 from generators.unet import Unet
+from utils import exists, default, StandardScaler
 
 import torch
 import torch.nn.functional as F
@@ -19,8 +20,6 @@ from math import pi, prod
 from tqdm import tqdm
 from typing import Union
 
-from utils import exists, default
-
 
 class VDM(pl.LightningModule):
     def __init__(
@@ -32,7 +31,8 @@ class VDM(pl.LightningModule):
         loss_type : str           = 'l2',
         lr : float                = 1e-5,
         adam_betas : tuple        = (0.9, 0.99),
-        p_unconditional : float   = 0.1
+        p_unconditional : float   = 0.1,
+        scaler : StandardScaler   = None
     ):
         super().__init__()
         
@@ -53,12 +53,14 @@ class VDM(pl.LightningModule):
         self.adam_betas     = adam_betas                       # adam parameters
         self.p_unconditional= p_unconditional                  # unconditional probability
         self.loss_fn        = {'l1': F.l1_loss, 'l2': F.mse_loss}[self.loss_type]
+        self.scale_input    = exists(scaler)
+        self.scaler = scaler if exists(scaler) else StandardScaler(mean=0, std=1)
         
         # --- High-frequency model only ---
         if self.kind == 'HF':
             assert exists(num_tokens_l), 'the number of tokens for the LF model must be given'
             
-            self.tok_emb_l = nn.Embedding(32, 64) # 32 = codebook size for LF, 64 = embedding dimension for HF
+            self.tok_emb_l = nn.Embedding(32, 64)
             
             
     # --- Variance schedule ---
@@ -202,17 +204,16 @@ class VDM(pl.LightningModule):
         pred_z = model_mean + model_variance * delta
         
         # Z-normalize the variance
-        #pred_z /= torch.std(pred_z)
+        pred_z /= torch.std(pred_z)
         
         return pred_z, pred_x
 
 
     @torch.no_grad()
-    def sample(self, n_samples=1, sampling_steps=16, class_condition : Union[None, int, torch.Tensor] = None, guidance_weight : int = 1.0):
+    def sample(self, n_samples:int = 1, sampling_steps:int = 16, class_condition:Union[None, int, torch.Tensor] = None, guidance_weight:float = 1.0):
         """ 
         Ancestral sampling from the diffusion model
         """
-        assert n_samples == int and n_samples > 0, 'Number of samples must be a positive integer!'
         
         if type(class_condition) == int:
             class_condition = torch.full((1, n_samples), class_condition, device=self.device)
@@ -226,7 +227,11 @@ class VDM(pl.LightningModule):
         # sample from p_theta(z_s | z_t, t, class_condition)
         for s, t in tqdm(zip(tau[1:], tau[:-1]), desc='Sampling', total=sampling_steps):
             z, _ = self.p_sample(z, s, t, class_condition, guidance_weight)
-            
+        
+        # inverse transform
+        if self.scale_input:
+            z = self.scaler.inverse_transform(z)
+        
         return z
     
 
@@ -250,6 +255,10 @@ class VDM(pl.LightningModule):
         """
         
         b, c, l = x.shape # (batch, channels, length)
+        
+        # scale input
+        if self.scale_input:
+            x = self.scaler.transform(x)
         
         # sample quasi-random time
         t = default(t, lambda: self.quasi_rand((b), device=self.device))
@@ -303,8 +312,7 @@ class VDM(pl.LightningModule):
             # TODO: Incorporate these token embeddings!!!
             
         loss = self.p_losses(X, t, Y)
-        
-        
+
         return loss
         
     

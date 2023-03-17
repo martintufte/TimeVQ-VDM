@@ -14,7 +14,9 @@ from torch.utils.data import DataLoader
 from experiments.exp_vq_vae import ExpVQVAE
 from preprocessing.preprocess_ucr import DatasetImporterUCR
 from preprocessing.data_pipeline import build_data_pipeline
-from utils import *
+from utils import get_root_dir, count_parameters, save_model, load_yaml_param_settings
+
+from datetime import datetime
 
 
 def load_args():
@@ -33,14 +35,16 @@ def train_stage1(config: dict,
     """
     :param do_validate: if True, validation is conducted during training with a test dataset.
     """
-    project_name = 'TimeVQVAE-stage1'
+    project_name = 'TimeVQVDM-stage1'
     if wandb_project_case_idx != '':
         project_name += f'-{wandb_project_case_idx}'
 
     # fit
     input_length = train_data_loader.dataset.X.shape[-1]
     train_exp = ExpVQVAE(input_length, config, len(train_data_loader.dataset))
-    wandb_logger = WandbLogger(project=project_name, name=None, config=config)
+    wandb_logger = WandbLogger(project=project_name,
+                               name=config['dataset']['dataset_name']+'-'+datetime.now().strftime('%D - %H:%M:%S'),
+                               config=config)
     trainer = pl.Trainer(logger=wandb_logger,
                          enable_checkpointing=False,
                          callbacks=[LearningRateMonitor(logging_interval='epoch')],
