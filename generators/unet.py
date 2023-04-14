@@ -388,6 +388,7 @@ class Unet(pl.LightningModule):
         t = t*1000
         emb = self.time_emb(t)
         
+        
         if self.class_conditional:
             if exists(y):
                 y = y.type(torch.int32)
@@ -397,9 +398,11 @@ class Unet(pl.LightningModule):
                 class_emb = self.class_emb(y)
             emb = torch.concat((emb, class_emb), dim=1)
         
+        
         # 1. initial block
         z = self.init_block(z)
         first_skip_connection = z.clone()
+        
         
         # 2. down part
         skip_connections = []
@@ -410,6 +413,7 @@ class Unet(pl.LightningModule):
             z = attn(z)
             skip_connections.append(z)
             z = downsample(z)
+        
         
         # 3. bottleneck
         z = self.mid_block1(z, emb)
@@ -425,9 +429,11 @@ class Unet(pl.LightningModule):
             z = res_block2(z, emb)
             z = attn(z)
         
+        
         # 5. final block
         z = torch.cat((z, first_skip_connection), dim=1)
         z = self.final_res_block(z, emb)
         z = self.final_conv_block(z)
+        
         
         return z

@@ -6,6 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
+# set path to parent directory
+import sys
+sys.path.append('../')
+
+from utils import compute_downsample_rate
 
 class ResBlock(nn.Module):
     def __init__(self, in_channels, out_channels, mid_channels=None, bn=False):
@@ -162,15 +167,52 @@ class VQVAEDecoder(nn.Module):
 
 if __name__ == '__main__':
 
-    x = torch.rand(1, 2, 4, 128)  # (batch, channels, height, width)
+    ts_length = 152
 
-    encoder = VQVAEEncoder(d=32, num_channels=2, downsample_rate=4, n_resnet_blocks=2)
-    decoder = VQVAEDecoder(d=32, num_channels=2, downsample_rate=4, n_resnet_blocks=2)
+    x = torch.rand(1, 2, 5, ts_length)  # (batch, channels, height, width)
+    
+    rate_l = compute_downsample_rate(ts_length, 8, 8)
+    rate_h = compute_downsample_rate(ts_length, 8, 32)
+    
+    print(int(ts_length//2**int(np.log2(rate_l))))
+    print(int(ts_length//2**int(np.log2(rate_h))))
+    
+    encoder = VQVAEEncoder(d=32, num_channels=2, downsample_rate=rate_l, n_resnet_blocks=2)
+    decoder = VQVAEDecoder(d=32, num_channels=2, downsample_rate=rate_l, n_resnet_blocks=2)
     decoder.upsample_size = torch.IntTensor(np.array(x.shape[2:]))
 
     z = encoder(x)
     x_recons = decoder(z)
-
+    
+    print('LF:')
     print('x.shape:', x.shape)
     print('z.shape:', z.shape)
     print('x_recons.shape:', x_recons.shape)
+
+
+    encoder = VQVAEEncoder(d=32, num_channels=2, downsample_rate=rate_h, n_resnet_blocks=2)
+    decoder = VQVAEDecoder(d=32, num_channels=2, downsample_rate=rate_h, n_resnet_blocks=2)
+    decoder.upsample_size = torch.IntTensor(np.array(x.shape[2:]))
+
+    z = encoder(x)
+    x_recons = decoder(z)
+    
+    print('HF:')
+    print('x.shape:', x.shape)
+    print('z.shape:', z.shape)
+    print('x_recons.shape:', x_recons.shape)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

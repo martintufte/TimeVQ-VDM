@@ -5,6 +5,11 @@ sample
     1) unconditional sampling
     2) class-conditional sampling
 """
+
+# set path to parent directory
+import sys
+sys.path.append('../')
+
 import os
 from argparse import ArgumentParser
 
@@ -147,6 +152,8 @@ if __name__ == '__main__':
     
     # plot sample along with reconstruction
     for x, y in train_data_loader:
+        #x = torch.randn_like(x)
+        
         x, u, u_l, u_h, z_l, z_h, u_l_hat, u_h_hat, x_l_hat, x_h_hat = sampler.vqvdm(x, y, verbose=True)
         plt.plot(x_l_hat[0,0,:].cpu(), color='silver', linestyle='--', label='recon LF')
         plt.plot(x_h_hat[0,0,:].cpu(), color='gray', linestyle='--', label='recon HF')
@@ -154,8 +161,23 @@ if __name__ == '__main__':
         plt.plot(x[0,0,:].cpu(), label='True')
         plt.legend()
         plt.show()
+        
+        '''
+        plt.plot(x[0,0,:].cpu())
+        plt.ylim(-2, 2)
+        plt.show('figures/x.svg')
+        
+        plt.plot(x_l_hat[0,0,:].cpu())
+        plt.ylim(-2, 2)
+        plt.show('figures/LF.svg')
+        
+        plt.plot(x_h_hat[0,0,:].cpu())
+        plt.ylim(-2, 2)
+        plt.show('figures/HF.svg')
+        '''
         break
     
+    '''
     # plot distribution of tokens
     for x, y in train_data_loader:
         v_l_q, v_h_q = sampler.vqvdm.vq_distr(x, y)
@@ -167,15 +189,15 @@ if __name__ == '__main__':
         plt.legend()
         plt.show()
         break
-    
+    '''
     # sample unconditionally
     conditional_samples = sampler.sample(kind='unconditional', n_samples=5, class_index=0, batch_size=10)
     x_l_gen, x_h_gen = conditional_samples
     
     for i in range(5):
         plt.plot(x_l_gen[i,0,:].cpu(), color='silver', linestyle='--', label='gen LF')
-        #plt.plot(x_h_gen[i,0,:].cpu(), color='gray', linestyle='--', label='gen HF')
-        #plt.plot(x_h_gen[i,0,:].cpu()+x_l_gen[i,0,:].cpu(), color='red', label='generation')
+        plt.plot(x_h_gen[i,0,:].cpu(), color='gray', linestyle='--', label='gen HF')
+        plt.plot(x_h_gen[i,0,:].cpu()+x_l_gen[i,0,:].cpu(), color='red', label='generation')
         plt.legend()
         plt.show()
     

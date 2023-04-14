@@ -24,9 +24,7 @@ from typing import Union
 class VDM(pl.LightningModule):
     def __init__(
         self,
-        kind : str,
         model : Unet,
-        num_tokens_l : int        = None,
         objective : str           = 'pred_noise',
         loss_type : str           = 'l2',
         lr : float                = 1e-5,
@@ -37,12 +35,10 @@ class VDM(pl.LightningModule):
         super().__init__()
         
         # --- assert inputs ---
-        assert kind in {'LF', 'HF'}, 'kind must be either LF or HF'
         assert loss_type in {'l1', 'l2'}, 'loss_type must be either l1 or l2'
         assert objective in {'pred_noise', 'pred_x', 'pred_v'}, f'objective {objective} is not supported'
         
         # --- architecture ---
-        self.kind           = kind                             # High-freq or low-freq diffusion model
         self.model          = model                            # Unet model
         self.channels       = model.in_channels                # number of input channels (!= n_tokens)
         self.ts_length      = model.ts_length                  # time series length (= dim of codebooks)
@@ -56,11 +52,6 @@ class VDM(pl.LightningModule):
         self.scale_input    = exists(scaler)
         self.scaler = scaler if exists(scaler) else StandardScaler(mean=0, std=1)
         
-        # --- High-frequency model only ---
-        if self.kind == 'HF':
-            assert exists(num_tokens_l), 'the number of tokens for the LF model must be given'
-            
-            self.tok_emb_l = nn.Embedding(32, 64)
             
             
     # --- Variance schedule ---
@@ -162,10 +153,10 @@ class VDM(pl.LightningModule):
         expr      = 1 - sigma2_s * (alpha_ts / sigma_t)**2
 
         # change Tensors to correct shape and device
-        alpha_ts = alpha_ts.view(-1,1,1).to(self.device)
-        sigma_t  = sigma_t.view(-1,1,1).to(self.device)
-        sigma2_s = sigma2_s.view(-1,1,1).to(self.device)
-        expr     = expr.view(-1,1,1).to(self.device)
+        #alpha_ts = alpha_ts.view(-1,1,1).to(self.device)
+        #sigma_t  = sigma_t.view(-1,1,1).to(self.device)
+        #sigma2_s = sigma2_s.view(-1,1,1).to(self.device)
+        #expr     = expr.view(-1,1,1).to(self.device)
         
         # calculate model mean
         posterior_mean = 1/alpha_ts * (z_t - sigma_t * expr * pred_noise)
@@ -177,7 +168,7 @@ class VDM(pl.LightningModule):
 
 
     @torch.no_grad()
-    def p_sample(self, z, s, t, condition : Union[None, torch.Tensor] = None, guidance_weight : int = 1.0):
+    def p_sample(self, z, s, t, condition : Union[None, torch.Tensor] = None, guidance_scale : int = 1.0):
         """
         single sample loop p_theta(z_s | z_t)
         """
@@ -189,8 +180,8 @@ class VDM(pl.LightningModule):
             uncond_noise, uncond_x = self.model_predictions(z, t, None)
             
             # classifier-free predictions
-            pred_noise = (1-guidance_weight) * uncond_noise + guidance_weight * cond_noise
-            pred_x = (1-guidance_weight) * uncond_x + guidance_weight * cond_x
+            pred_noise = (1-guidance_scale) * uncond_noise + guidance_scale * cond_noise
+            pred_x = (1-guidance_scale) * uncond_x + guidance_scale * cond_x
         else:
             # normal (unconditional sampling)
             pred_noise, pred_x = self.model_predictions(z, t, None)
@@ -204,13 +195,13 @@ class VDM(pl.LightningModule):
         pred_z = model_mean + model_variance * delta
         
         # Z-normalize the variance
-        pred_z /= torch.std(pred_z)
+        #pred_z /= torch.std(pred_z)
         
         return pred_z, pred_x
 
 
     @torch.no_grad()
-    def sample(self, n_samples:int = 1, sampling_steps:int = 16, class_condition:Union[None, int, torch.Tensor] = None, guidance_weight:float = 1.0):
+    def sample(self, n_samples:int = 1, sampling_steps:int = 16, class_condition:Union[None, int, torch.Tensor] = None, guidance_scale:float = 1.0):
         """ 
         Ancestral sampling from the diffusion model
         """
@@ -226,7 +217,7 @@ class VDM(pl.LightningModule):
         
         # sample from p_theta(z_s | z_t, t, class_condition)
         for s, t in tqdm(zip(tau[1:], tau[:-1]), desc='Sampling', total=sampling_steps):
-            z, _ = self.p_sample(z, s, t, class_condition, guidance_weight)
+            z, _ = self.p_sample(z, s, t, class_condition, guidance_scale)
         
         # inverse transform
         if self.scale_input:
@@ -301,15 +292,11 @@ class VDM(pl.LightningModule):
 
     
     # --- Overwriting PyTorch Lightning in-build methods ---
-    def forward(self, X, Y, embed_ind_l = None, *args, **kwargs):
+    
+    def forward(self, X, Y, *args, **kwargs):
         Y = Y.flatten() # nescessary if Y is 2D
         
         t = self.quasi_rand(X.shape[0])
-        
-        if self.kind=='HF' and exists(embed_ind_l):
-            token_embeddings_l = self.tok_emb_l(embed_ind_l)  # (B C N)
-            
-            # TODO: Incorporate these token embeddings!!!
             
         loss = self.p_losses(X, t, Y)
 

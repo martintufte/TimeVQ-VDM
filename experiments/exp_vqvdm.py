@@ -12,11 +12,11 @@ class ExpVQVDM(ExpBase):
     def __init__(self,
                  input_length: int,
                  config: dict,
-                 n_train_samples: int,
-                 n_classes: int):
+                 n_train_samples: int
+                 ):
         super().__init__()
         self.config = config
-        self.vqvdm = VQVDM(input_length, config=config, n_classes=n_classes)
+        self.vqvdm = VQVDM(input_length, config=config)
         self.T_max = config['trainer_params']['max_epochs']['stage2'] * (np.ceil(n_train_samples / config['dataset']['batch_sizes']['stage2']) + 1)
 
 
@@ -32,7 +32,6 @@ class ExpVQVDM(ExpBase):
         
         # prior loss
         prior_loss_l, prior_loss_h = self.vqvdm(x, y)
-        prior_loss = (prior_loss_l + prior_loss_h)/2
         loss = (prior_loss_l + prior_loss_h)/2
 
         # lr scheduler
@@ -40,9 +39,7 @@ class ExpVQVDM(ExpBase):
         sch.step()
 
         # log
-        loss_hist = {'loss': loss,
-                     'prior_loss': prior_loss,
-                     }
+        loss_hist = {'loss': loss}
         
         # vqvdm sampling
         '''
@@ -83,13 +80,10 @@ class ExpVQVDM(ExpBase):
         
         # prior loss
         prior_loss_l, prior_loss_h = self.vqvdm(x, y)
-        prior_loss = (prior_loss_l + prior_loss_h)/2
         loss = (prior_loss_l + prior_loss_h)/2
 
         # log
-        loss_hist = {'loss': loss,
-                     'prior_loss': prior_loss,
-                     }
+        loss_hist = {'loss': loss}
         
         detach_the_unnecessary(loss_hist)
         return loss_hist
@@ -107,13 +101,10 @@ class ExpVQVDM(ExpBase):
         
         # prior loss
         prior_loss_l, prior_loss_h = self.vqvdm(x, y)
-        prior_loss = (prior_loss_l + prior_loss_h)/2
         loss = (prior_loss_l + prior_loss_h)/2
 
         # log
-        loss_hist = {'loss': loss,
-                     'prior_loss': prior_loss,
-                     }
+        loss_hist = {'loss': loss}
         
         detach_the_unnecessary(loss_hist)
         return loss_hist

@@ -1,11 +1,16 @@
+# -*- coding: utf-8 -*-
 """
+Created on Sun Mar 19 17:05:15 2023
+
+@author: martigtu@stud.ntnu.no
+
 Stage2: prior learning
 
-run `python stage2.py`
+run `python stage2_alt.py`
 """
+
 from argparse import ArgumentParser
 
-import torch
 import wandb
 import numpy as np
 import pytorch_lightning as pl
@@ -15,7 +20,8 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 from pytorch_lightning.loggers import WandbLogger
 from preprocessing.preprocess_ucr import DatasetImporterUCR
 
-from experiments.exp_vqvdm import ExpVQVDM
+# alternative imports
+from experiments.exp_vqvdm_alt import ExpQDM
 from evaluation.evaluation import Evaluation
 from utils import get_root_dir, load_yaml_param_settings, save_model, count_parameters
 
@@ -28,7 +34,7 @@ def load_args():
     return parser.parse_args()
 
 
-def train_stage2(config: dict,
+def train_stage2_alt(config: dict,
                  train_data_loader: DataLoader,
                  test_data_loader: DataLoader = None,
                  do_validate: bool = False,
@@ -37,13 +43,14 @@ def train_stage2(config: dict,
     """
     :param do_validate: if True, validation is conducted during training with a test dataset.
     """
-    project_name = 'TimeVQVDM-stage2'
+    project_name = 'TimeVQVDM-stage2_alt'
     if wandb_project_case_idx != '':
         project_name += f'-{wandb_project_case_idx}'
 
     # fit
+    n_classes = len(np.unique(train_data_loader.dataset.Y))
     input_length = train_data_loader.dataset.X.shape[-1]
-    train_exp = ExpVQVDM(input_length, config, len(train_data_loader.dataset))
+    train_exp = ExpQDM(input_length, config, len(train_data_loader.dataset), n_classes)
     wandb_logger = WandbLogger(project=project_name,
                                name=config['dataset']['dataset_name']+'-'+datetime.now().strftime('%D - %H:%M:%S'),
                                config=config)
@@ -57,13 +64,13 @@ def train_stage2(config: dict,
                 train_dataloaders=train_data_loader,
                 val_dataloaders=test_data_loader if do_validate else None
                 )
- 
+
     # additional log
     n_trainable_params = count_parameters(train_exp)
     wandb.log({'n_trainable_params:': n_trainable_params})
 
     print('saving the model...')
-    save_model({'vqvdm': train_exp.vqvdm}, id=config['dataset']['dataset_name'])
+    save_model({'qdm': train_exp.qdm}, id=config['dataset']['dataset_name'])
 
     # test
     print('evaluating...')
@@ -98,4 +105,4 @@ if __name__ == '__main__':
     train_data_loader, test_data_loader = [build_data_pipeline(batch_size, dataset_importer, config, kind) for kind in ['train', 'test']]
 
     # train
-    train_stage2(config, train_data_loader)
+    train_stage2_alt(config, train_data_loader)

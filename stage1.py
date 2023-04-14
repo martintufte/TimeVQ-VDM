@@ -52,8 +52,8 @@ def train_stage1(config: dict,
                          devices=config['trainer_params']['gpus'],
                          accelerator='gpu')
     trainer.fit(train_exp,
-                train_dataloaders=train_data_loader,
-                val_dataloaders=test_data_loader if do_validate else None
+                train_dataloaders = train_data_loader,
+                val_dataloaders = test_data_loader if do_validate else None
                 )
 
     # additional log

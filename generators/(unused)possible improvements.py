@@ -80,7 +80,6 @@ if __name__ == '__main__':
 
     # plot sample along with reconstruction
     for x, y in train_data_loader:
-        
         ts_length = x.shape[0]
         
         # plot x
@@ -88,8 +87,9 @@ if __name__ == '__main__':
         
         L = floor(ts_length/32)
         
-        xf = torch.fft.fft(x)
+        eps = torch.randn_like()
         
+        xf = torch.fft.fft(x)
         xf_l = torch.zeros_like(xf)
         xf_h = torch.zeros_like(xf)
         xf_l[:,:,:L] = 2*xf[:,:,:L]

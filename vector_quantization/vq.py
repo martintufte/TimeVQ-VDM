@@ -298,6 +298,7 @@ class VectorQuantize(nn.Module):
         )
 
         self.codebook_size = codebook_size
+        self.codebook_dim = codebook_dim
 
         self.accept_image_fmap = accept_image_fmap
         self.channel_last = channel_last
