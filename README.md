@@ -16,5 +16,5 @@ $ conda activate timevqvdm
 ## Usage
 
 ### Configuration
-- `configs/config.yaml`: configuration for dataset, data loading, optimizer, and models (_i.e.,_ encoder, decoder, vector-quantizer, and VDM)
-- `config/sconfig_cas.yaml`: configuration for running CAS, Classification Accuracy Score (= TSTR, Training on Synthetic and Test on Real).
+- `configs/config.yaml`: configuration for dataset, stage 1 and 2, and models (_i.e.,_ encoder, decoder, vector-quantizer, and diffusion models)
+- `config/config_cas.yaml`: configuration for running CAS, Classification Accuracy Score (= TSTR, Training on Synthetic and Test on Real).
