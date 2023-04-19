@@ -24,31 +24,32 @@ class ExpVQVAE(ExpBase):
         """
         super().__init__()
         self.config = config
-        self.T_max = config['trainer_params']['max_epochs']['stage1'] * (np.ceil(n_train_samples / config['dataset']['batch_sizes']['stage1']) + 1)
+        self.T_max = config['stage1']['max_epochs'] * (np.ceil(n_train_samples / config['stage1']['batch_size']) + 1)
 
-        self.n_fft = config['VQ-VAE']['n_fft']
-        dim = config['encoder']['dim']
+        self.n_fft = config['VQ']['n_fft']
+        dim = config['EncDec']['dim']
         in_channels = config['dataset']['in_channels']
-        downsampled_width_l = config['encoder']['downsampled_width']['lf']
-        downsampled_width_h = config['encoder']['downsampled_width']['hf']
+        downsampled_width_l = config['EncDec']['downsampled_width']['lf']
+        downsampled_width_h = config['EncDec']['downsampled_width']['hf']
         downsample_rate_l = compute_downsample_rate(input_length, self.n_fft, downsampled_width_l)
         downsample_rate_h = compute_downsample_rate(input_length, self.n_fft, downsampled_width_h)
 
         # encoder
-        self.encoder_l = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_l, config['encoder']['n_resnet_blocks'])
-        self.decoder_l = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_l, config['decoder']['n_resnet_blocks'])
-        self.vq_model_l = VectorQuantize(dim, config['VQ-VAE']['codebook_sizes']['lf'], **config['VQ-VAE'])
+        self.encoder_l = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_l, config['EncDec']['n_resnet_blocks'])
+        self.decoder_l = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_l, config['EncDec']['n_resnet_blocks'])
+        self.vq_model_l = VectorQuantize(dim, config['VQ']['codebook_sizes']['lf'], **config['VQ'])
 
         # decoder
-        self.encoder_h = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_h, config['encoder']['n_resnet_blocks'])
-        self.decoder_h = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_h, config['decoder']['n_resnet_blocks'])
-        self.vq_model_h = VectorQuantize(dim, config['VQ-VAE']['codebook_sizes']['hf'], **config['VQ-VAE'])
+        self.encoder_h = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_h, config['EncDec']['n_resnet_blocks'])
+        self.decoder_h = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_h, config['EncDec']['n_resnet_blocks'])
+        self.vq_model_h = VectorQuantize(dim, config['VQ']['codebook_sizes']['hf'], **config['VQ'])
 
         # pre-trained feature extractor in case the perceptual loss is used
-        if config['VQ-VAE']['perceptual_loss_weight']:
+        if config['VQ']['perceptual_loss_weight']:
             self.fcn = load_pretrained_FCN(config['dataset']['dataset_name']).to(self.device)
             self.fcn.eval()
             freeze(self.fcn)
+
 
     def forward(self, batch):
         """
@@ -98,7 +99,7 @@ class ExpVQVAE(ExpBase):
         perplexities['HF'] = perplexity_h
         vq_losses['HF'] = vq_loss_h
 
-        if self.config['VQ-VAE']['perceptual_loss_weight']:
+        if self.config['VQ']['perceptual_loss_weight']:
             z_fcn = self.fcn(x.float(), return_feature_vector=True).detach()
             zhat_fcn = self.fcn(xhat_l.float() + xhat_h.float(), return_feature_vector=True)
             recons_loss['perceptual'] = F.mse_loss(z_fcn, zhat_fcn)
@@ -193,15 +194,15 @@ class ExpVQVAE(ExpBase):
         return loss_hist
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW([{'params': self.encoder_l.parameters(), 'lr': self.config['exp_params']['lr']},
-                                 {'params': self.decoder_l.parameters(), 'lr': self.config['exp_params']['lr']},
-                                 {'params': self.vq_model_l.parameters(), 'lr': self.config['exp_params']['lr']},
+        opt = torch.optim.AdamW([{'params': self.encoder_l.parameters(), 'lr': self.config['stage1']['lr']},
+                                 {'params': self.decoder_l.parameters(), 'lr': self.config['stage1']['lr']},
+                                 {'params': self.vq_model_l.parameters(), 'lr': self.config['stage1']['lr']},
 
-                                 {'params': self.encoder_h.parameters(), 'lr': self.config['exp_params']['lr']},
-                                 {'params': self.decoder_h.parameters(), 'lr': self.config['exp_params']['lr']},
-                                 {'params': self.vq_model_h.parameters(), 'lr': self.config['exp_params']['lr']},
+                                 {'params': self.encoder_h.parameters(), 'lr': self.config['stage1']['lr']},
+                                 {'params': self.decoder_h.parameters(), 'lr': self.config['stage1']['lr']},
+                                 {'params': self.vq_model_h.parameters(), 'lr': self.config['stage1']['lr']},
                                  ],
-                                weight_decay=self.config['exp_params']['weight_decay'])
+                                weight_decay=self.config['stage1']['weight_decay'])
         return {'optimizer': opt, 'lr_scheduler': CosineAnnealingLR(opt, self.T_max)}
 
     def test_step(self, batch, batch_idx):

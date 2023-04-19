@@ -6,15 +6,13 @@ Created on Tue Feb 28 13:51:03 2023
 """
 
 
-from generators.unet import Unet
+from diffusion_model.unet import Unet
 from utils import exists, default, StandardScaler
 
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.optim import Adam
-from torch import nn
-
 from einops import reduce
 from math import pi, prod
 from tqdm import tqdm
@@ -35,13 +33,13 @@ class VDM(pl.LightningModule):
         super().__init__()
         
         # --- assert inputs ---
-        assert loss_type in {'l1', 'l2'}, 'loss_type must be either l1 or l2'
         assert objective in {'pred_noise', 'pred_x', 'pred_v'}, f'objective {objective} is not supported'
+        assert loss_type in {'l1', 'l2'}, 'loss_type must be either l1 or l2'
         
         # --- architecture ---
         self.model          = model                            # Unet model
-        self.channels       = model.in_channels                # number of input channels (!= n_tokens)
-        self.ts_length      = model.ts_length                  # time series length (= dim of codebooks)
+        self.channels       = model.in_channels                # number of input channels
+        self.ts_length      = model.ts_length                  # time series length
         self.n_classes      = model.n_classes                  # number of classes
         self.loss_type      = loss_type                        # loss type
         self.objective      = objective                        # prediction objective
@@ -143,20 +141,10 @@ class VDM(pl.LightningModule):
              
         var  = (1 - (alpha_t * sigma_s / (alpha_s * sigma_t))**2 ) sigma_s**2
         """
-        
-        b, c, l = z_t.shape # (batch, channels, length)
-        
-        
         alpha_ts   = self.alpha(t) / self.alpha(s)
         sigma_t   = self.sigma(t)
         sigma2_s  = self.sigma(s)**2
         expr      = 1 - sigma2_s * (alpha_ts / sigma_t)**2
-
-        # change Tensors to correct shape and device
-        #alpha_ts = alpha_ts.view(-1,1,1).to(self.device)
-        #sigma_t  = sigma_t.view(-1,1,1).to(self.device)
-        #sigma2_s = sigma2_s.view(-1,1,1).to(self.device)
-        #expr     = expr.view(-1,1,1).to(self.device)
         
         # calculate model mean
         posterior_mean = 1/alpha_ts * (z_t - sigma_t * expr * pred_noise)
@@ -195,7 +183,7 @@ class VDM(pl.LightningModule):
         pred_z = model_mean + model_variance * delta
         
         # Z-normalize the variance
-        #pred_z /= torch.std(pred_z)
+        pred_z /= torch.std(pred_z)
         
         return pred_z, pred_x
 
@@ -207,7 +195,7 @@ class VDM(pl.LightningModule):
         """
         
         if type(class_condition) == int:
-            class_condition = torch.full((1, n_samples), class_condition, device=self.device)
+            class_condition = torch.full((n_samples,), class_condition, device=self.device)
         
         # time discretization
         tau = torch.linspace(1, 0, sampling_steps+1, device=self.device).view(-1,1)
@@ -219,7 +207,7 @@ class VDM(pl.LightningModule):
         for s, t in tqdm(zip(tau[1:], tau[:-1]), desc='Sampling', total=sampling_steps):
             z, _ = self.p_sample(z, s, t, class_condition, guidance_scale)
         
-        # inverse transform
+        # scale output
         if self.scale_input:
             z = self.scaler.inverse_transform(z)
         

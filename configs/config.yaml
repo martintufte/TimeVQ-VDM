@@ -2,62 +2,62 @@ dataset:
   dataset_name: 'Wafer'
   in_channels: 1
   data_scaling: True
-  batch_sizes:
-    stage1: 128
-    stage2: 256
   num_workers: 0
 
-exp_params:
+stage1:
+  batch_size: 128
+  max_epochs: 1000
   lr: 0.001
   weight_decay: 0.00001
+  gpus: 0
 
-trainer_params:
-  gpus:
-    - 0
-  max_epochs:
-    stage1: 500
-    stage2: 1000
+stage2:
+  batch_size: 128
+  max_epochs: 1000
+  lr: 0.001
+  weight_decay: 0.00001
+  gpus: 0
 
+stage3:
+  n_samples: 100
+  sampling_steps:
+    lf: 10
+    hf: 50
+  class_index: None
+  batch_size: 128
 
-encoder:
+EncDec:
   dim: 4
   n_resnet_blocks: 4
   downsampled_width:
     lf: 8
     hf: 32
 
-decoder:
-  dim: 4
-  n_resnet_blocks: 4
-
-
-VQ-VAE:
+VQ:
   n_fft: 8
+  codebook_dim: 4
   codebook_sizes:
-    lf: 128
-    hf: 128
+    lf: 512
+    hf: 512
   decay: 0.8
   commitment_weight: 1.
-  codebook_dim: 4
   emb_dropout: 0.
   perceptual_loss_weight: 0
 
 Unet:
-    dim: 64
-    dim_mults: (-1,-2,-4)
-    in_channels: -1
-    resnet_block_groups: 4
-    class_dim: 128
-    time_dim: 128
+  dim: 64
+  dim_mults:
+    lf: (1,2)
+    hf: (1,2,4,8)
+  resnet_block_groups: 4
+  class_dim: 128
+  time_dim: 128
 
 VDM:
-  objective: pred_v
+  objective: pred_noise
   loss_type: l2
   lr: 0.00001
   adam_betas:
     - 0.9
     - 0.99
   p_unconditional: 0.1
-
-class_guidance:
-  guidance_scale: 1.

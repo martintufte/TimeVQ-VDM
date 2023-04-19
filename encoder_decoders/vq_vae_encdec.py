@@ -202,17 +202,3 @@ if __name__ == '__main__':
     print('z.shape:', z.shape)
     print('x_recons.shape:', x_recons.shape)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-

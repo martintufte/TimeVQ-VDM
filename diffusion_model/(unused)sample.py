@@ -1,10 +1,4 @@
-"""
-`python sample.py`
 
-sample
-    1) unconditional sampling
-    2) class-conditional sampling
-"""
 
 # set path to parent directory
 import sys
@@ -29,7 +23,7 @@ from typing import Union
 def load_args():
     parser = ArgumentParser()
     parser.add_argument('--config', type=str, help="Path to the config data  file.",
-                        default=get_root_dir().joinpath('configs', 'config.yaml'))
+                        default=get_root_dir().joinpath('configs', 'config_new.yaml'))
     return parser.parse_args()
 
 
@@ -103,82 +97,30 @@ class Sampler(object):
         self.vqvdm.eval()
 
     @torch.no_grad()
-    def unconditional_sample(self, n_samples: int, class_index : Union[int, None] = None, batch_size=256):
-        return self.vqvdm.sample(n_samples, None, batch_size, self.guidance_scale)
+    def unconditional_sample(self, n_samples: int, sampling_steps: int, class_index : Union[int, None] = None, batch_size=256):
+        return self.vqvdm.sample(n_samples, sampling_steps, None, batch_size, self.guidance_scale)
 
     @torch.no_grad()
-    def conditional_sample(self, n_samples: int, class_index: int, batch_size=256):
+    def conditional_sample(self, n_samples: int, sampling_steps: int, class_index: int, batch_size=256):
         """
         class_index: starting from 0. If there are two classes, then `class_index` ∈ {0, 1}.
         """
-        return self.vqvdm.sample(n_samples, class_index, batch_size, self.guidance_scale)
+        return self.vqvdm.sample(n_samples, sampling_steps, class_index, batch_size, self.guidance_scale)
     
-    
-    @torch.no_grad()
-    def random_sample(self, n_samples: int, class_index: int, batch_size=256):
-        """
-        class_index: starting from 0. If there are two classes, then `class_index` ∈ {0, 1}.
-        """
-        return self.vqvdm.sample(n_samples, class_index, batch_size, self.guidance_scale)
     
 
-    def sample(self, kind: str, n_samples: int, class_index: int, batch_size: int, guidance_scale: int = 1.0):
+    def sample(self, kind: str, n_samples: int, sampling_steps: int, class_index: int, batch_size: int, guidance_scale: int = 1.0):
         if kind == 'unconditional':
-            x_new_l, x_new_h = self.unconditional_sample(n_samples, None, batch_size)  # (b c l); b=n_samples, c=1 (univariate)
+            print(kind, n_samples, sampling_steps, class_index, batch_size, guidance_scale)
+            x_new_l, x_new_h = self.unconditional_sample(n_samples, sampling_steps, None, batch_size)  # (b c l); b=n_samples, c=1 (univariate)
         elif kind == 'conditional':
-            x_new_l, x_new_h = self.conditional_sample(n_samples, class_index, batch_size)  # (b c l); b=n_samples, c=1 (univariate)
-        elif kind == 'random':
-            x_new_l, x_new_h = self.random_sample(n_samples, class_index, batch_size)  # (b c l); b=n_samples, c=1 (univariate)
+            x_new_l, x_new_h = self.conditional_sample(n_samples, sampling_steps, class_index, batch_size)  # (b c l); b=n_samples, c=1 (univariate)
         else:
             raise ValueError
         return x_new_l, x_new_h
 
 
-
-
-if __name__ == '__main__':
-    # load config
-    args = load_args()
-    config = load_yaml_param_settings(args.config)
-
-    # data pipeline
-    dataset_importer = DatasetImporterUCR(**config['dataset'])
-    batch_size = config['dataset']['batch_sizes']['stage2']
-    train_data_loader, test_data_loader = [build_data_pipeline(batch_size, dataset_importer, config, kind) for kind in ['train', 'test']]
-
-    # load VQVDM
-    from generators.timeVQVDM import VQVDM
-    sampler = Sampler(train_data_loader, config, device='cpu')
-    
-    # plot sample along with reconstruction
-    for x, y in train_data_loader:
-        #x = torch.randn_like(x)
-        
-        x, u, u_l, u_h, z_l, z_h, u_l_hat, u_h_hat, x_l_hat, x_h_hat = sampler.vqvdm(x, y, verbose=True)
-        plt.plot(x_l_hat[0,0,:].cpu(), color='silver', linestyle='--', label='recon LF')
-        plt.plot(x_h_hat[0,0,:].cpu(), color='gray', linestyle='--', label='recon HF')
-        plt.plot(x_h_hat[0,0,:].cpu()+x_l_hat[0,0,:].cpu(), color='red', label='recon')
-        plt.plot(x[0,0,:].cpu(), label='True')
-        plt.legend()
-        plt.show()
-        
-        '''
-        plt.plot(x[0,0,:].cpu())
-        plt.ylim(-2, 2)
-        plt.show('figures/x.svg')
-        
-        plt.plot(x_l_hat[0,0,:].cpu())
-        plt.ylim(-2, 2)
-        plt.show('figures/LF.svg')
-        
-        plt.plot(x_h_hat[0,0,:].cpu())
-        plt.ylim(-2, 2)
-        plt.show('figures/HF.svg')
-        '''
-        break
-    
-    '''
-    # plot distribution of tokens
+def plot_token_distr(train_data_loader, sampler):
     for x, y in train_data_loader:
         v_l_q, v_h_q = sampler.vqvdm.vq_distr(x, y)
         vql = v_l_q.flatten()
@@ -189,22 +131,59 @@ if __name__ == '__main__':
         plt.legend()
         plt.show()
         break
-    '''
+
+
+if __name__ == '__main__':
+    # load config
+    args = load_args()
+    config = load_yaml_param_settings(args.config)
+
+    # data pipeline
+    dataset_importer = DatasetImporterUCR(**config['dataset'])
+    batch_size = config['stage2']['batch_size']
+    train_data_loader = build_data_pipeline(batch_size, dataset_importer, config, kind='train')
+    test_data_loader = build_data_pipeline(batch_size, dataset_importer, config, kind='test')
+    
+    # load VQVDM
+    from generators.timeVQVDM import VQVDM
+    sampler = Sampler(train_data_loader, config, device='cpu')
+    
+    # plot sample along with reconstruction
+    for x, y in train_data_loader:
+        #x = torch.randn_like(x)
+        
+        x, x_l, x_h, u, u_l, u_h, z_l, z_h, u_l_hat, u_h_hat, x_l_hat, x_h_hat = sampler.vqvdm(x, y, verbose=True)
+        
+        # LF
+        plt.plot(x_l[0,0,:].cpu(), color='green', linestyle='-', label='LF')
+        plt.plot(x_l_hat[0,0,:].cpu(), color='silver', linestyle='-', label='recon LF')
+        plt.legend()
+        plt.savefig('test_LF.pdf')
+        plt.show()
+        
+        # HF
+        plt.plot(x_h[0,0,:].cpu(), color='green', linestyle='-', label='HF')
+        plt.plot(x_h_hat[0,0,:].cpu(), color='silver', linestyle='-', label='recon HF')
+        plt.legend()
+        plt.savefig('test_HF.pdf')
+        plt.show()
+        break
+    
+    
     # sample unconditionally
-    conditional_samples = sampler.sample(kind='unconditional', n_samples=5, class_index=0, batch_size=10)
-    x_l_gen, x_h_gen = conditional_samples
+    sampling_steps = 10
+    n_samples = 5
+    class_index = 0
+    batch_size = 16
+    
+    x_l_gen, x_h_gen = sampler.sample('unconditional', n_samples, sampling_steps, class_index, batch_size)
     
     for i in range(5):
-        plt.plot(x_l_gen[i,0,:].cpu(), color='silver', linestyle='--', label='gen LF')
-        plt.plot(x_h_gen[i,0,:].cpu(), color='gray', linestyle='--', label='gen HF')
-        plt.plot(x_h_gen[i,0,:].cpu()+x_l_gen[i,0,:].cpu(), color='red', label='generation')
+        plt.plot(x_l_gen[i,0,:].cpu(), color='green', linestyle='-', label='gen LF')
+        plt.plot(x_h_gen[i,0,:].cpu(), color='silver', linestyle='-', label='gen HF')
+        #plt.plot(x_h_gen[i,0,:].cpu()+x_l_gen[i,0,:].cpu(), color='green', label='generation')
         plt.legend()
         plt.show()
-    
-    
-    
-    
-    
     
     
     

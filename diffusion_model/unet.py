@@ -14,7 +14,6 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from einops import rearrange, reduce
-
 from utils import exists, default
 
 
@@ -396,6 +395,7 @@ class Unet(pl.LightningModule):
             else:
                 y = torch.Tensor([self.n_classes]).type(torch.int32).repeat(z.shape[0]).to(self.device)
                 class_emb = self.class_emb(y)
+                
             emb = torch.concat((emb, class_emb), dim=1)
         
         

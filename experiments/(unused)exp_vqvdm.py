@@ -5,7 +5,7 @@ import numpy as np
 import torch.nn.functional as F
 
 from experiments.exp_base import ExpBase, detach_the_unnecessary
-from generators.timeVQVDM import VQVDM
+from diffusion_model.timeVQVDM import VQVDM
 
 
 class ExpVQVDM(ExpBase):
@@ -17,7 +17,7 @@ class ExpVQVDM(ExpBase):
         super().__init__()
         self.config = config
         self.vqvdm = VQVDM(input_length, config=config)
-        self.T_max = config['trainer_params']['max_epochs']['stage2'] * (np.ceil(n_train_samples / config['dataset']['batch_sizes']['stage2']) + 1)
+        self.T_max = config['stage2']['max_epochs'] * (np.ceil(n_train_samples / config['stage2']['batch_size']) + 1)
 
 
     def forward(self, x):
@@ -90,8 +90,8 @@ class ExpVQVDM(ExpBase):
 
 
     def configure_optimizers(self):
-        opt = torch.optim.AdamW([{'params': self.vqvdm.parameters(), 'lr': self.config['exp_params']['lr']},],
-                                weight_decay=self.config['exp_params']['weight_decay'])
+        opt = torch.optim.AdamW([{'params': self.vqvdm.parameters(), 'lr': self.config['stage2']['lr']},],
+                                weight_decay=self.config['stage2']['weight_decay'])
         return {'optimizer': opt, 'lr_scheduler': CosineAnnealingLR(opt, self.T_max)}
 
 

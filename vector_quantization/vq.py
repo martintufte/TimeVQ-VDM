@@ -1,7 +1,6 @@
 """
 The code is taken from https://github.com/lucidrains/vector-quantize-pytorch
 """
-import copy
 import torch
 from torch import nn, einsum
 import torch.nn.functional as F
@@ -10,10 +9,8 @@ from torch.cuda.amp import autocast
 from torch.distributions.categorical import Categorical
 
 from einops import rearrange, repeat
-from contextlib import contextmanager
 
 from utils import *
-from x_transformers import ContinuousTransformerWrapper, Encoder as TFEncoder, Decoder as TFDecoder
 
 
 def exists(val):

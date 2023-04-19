@@ -11,8 +11,8 @@ from math import floor
 
 from einops import repeat, rearrange
 from typing import Callable
-from generators.unet import Unet
-from generators.vdm import VDM
+from diffusion_model.unet import Unet
+from diffusion_model.vdm import VDM
 
 from encoder_decoders.vq_vae_encdec import VQVAEEncoder, VQVAEDecoder
 from vector_quantization.vq import VectorQuantize
@@ -52,22 +52,22 @@ class VQVDM(nn.Module):
         self.n_classes = int(dataset_summary.loc[dataset_summary['Name']==self.name, 'Class'])
         
 
-        self.mask_token_ids = {'LF': config['VQ-VAE']['codebook_sizes']['lf'], 'HF': config['VQ-VAE']['codebook_sizes']['hf']}
+        self.mask_token_ids = {'LF': config['VQ']['codebook_sizes']['lf'], 'HF': config['VQ']['codebook_sizes']['hf']}
 
         # define encoder, decoder, vq_models
-        dim = config['encoder']['dim']
+        dim = config['EncDec']['dim']
         in_channels = config['dataset']['in_channels']
-        downsampled_width_l = config['encoder']['downsampled_width']['lf']
-        downsampled_width_h = config['encoder']['downsampled_width']['hf']
-        self.n_fft = config['VQ-VAE']['n_fft']
+        downsampled_width_l = config['EncDec']['downsampled_width']['lf']
+        downsampled_width_h = config['EncDec']['downsampled_width']['hf']
+        self.n_fft = config['VQ']['n_fft']
         downsample_rate_l = compute_downsample_rate(input_length, self.n_fft, downsampled_width_l)
         downsample_rate_h = compute_downsample_rate(input_length, self.n_fft, downsampled_width_h)
-        self.encoder_l = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_l, config['encoder']['n_resnet_blocks'])
-        self.decoder_l = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_l, config['decoder']['n_resnet_blocks'])
-        self.vq_model_l = VectorQuantize(dim, config['VQ-VAE']['codebook_sizes']['lf'], **config['VQ-VAE'])
-        self.encoder_h = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_h, config['encoder']['n_resnet_blocks'])
-        self.decoder_h = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_h, config['decoder']['n_resnet_blocks'])
-        self.vq_model_h = VectorQuantize(dim, config['VQ-VAE']['codebook_sizes']['hf'], **config['VQ-VAE'])
+        self.encoder_l = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_l, config['EncDec']['n_resnet_blocks'])
+        self.decoder_l = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_l, config['EncDec']['n_resnet_blocks'])
+        self.vq_model_l = VectorQuantize(dim, config['VQ']['codebook_sizes']['lf'], **config['VQ'])
+        self.encoder_h = VQVAEEncoder(dim, 2 * in_channels, downsample_rate_h, config['EncDec']['n_resnet_blocks'])
+        self.decoder_h = VQVAEDecoder(dim, 2 * in_channels, downsample_rate_h, config['EncDec']['n_resnet_blocks'])
+        self.vq_model_h = VectorQuantize(dim, config['VQ']['codebook_sizes']['hf'], **config['VQ'])
 
         # load trained models for encoder, decoder, and vq_models
         dataset_name = self.config['dataset']['dataset_name']
@@ -114,8 +114,8 @@ class VQVDM(nn.Module):
         self.embed_h = embed_h
         
         # compute length for the diffusion models based on downsampling width
-        rate_l = compute_downsample_rate(self.ts_length, config['VQ-VAE']['n_fft'], config['encoder']['downsampled_width']['lf'])
-        rate_h = compute_downsample_rate(self.ts_length, config['VQ-VAE']['n_fft'], config['encoder']['downsampled_width']['hf'])
+        rate_l = compute_downsample_rate(self.ts_length, config['VQ']['n_fft'], config['EncDec']['downsampled_width']['lf'])
+        rate_h = compute_downsample_rate(self.ts_length, config['VQ']['n_fft'], config['EncDec']['downsampled_width']['hf'])
         length_l = int(self.ts_length//2**int(np.log2(rate_l)+1))
         length_h = int(self.ts_length//2**int(np.log2(rate_h)+1))
         
@@ -125,9 +125,9 @@ class VQVDM(nn.Module):
             ts_length    = length_l,
             n_classes    = self.n_classes,
             dim          = config['Unet']['dim'],
-            dim_mults    = (1, 2),
-            in_channels  = config['VQ-VAE']['codebook_dim'] * 5,
-            out_channels = config['VQ-VAE']['codebook_dim'] * 5,
+            dim_mults    = (1,2),#config['Unet']['dim_mults']['lf'],
+            in_channels  = config['VQ']['codebook_dim'] * 5,
+            out_channels = config['VQ']['codebook_dim'] * 5,
             resnet_block_groups = config['Unet']['resnet_block_groups'],
             time_dim     = config['Unet']['time_dim'],
             class_dim    = config['Unet']['class_dim']
@@ -145,9 +145,9 @@ class VQVDM(nn.Module):
             ts_length    = length_h,
             n_classes    = self.n_classes,
             dim          = config['Unet']['dim'],
-            dim_mults    = (1, 2, 4, 8),
-            in_channels  = config['VQ-VAE']['codebook_dim'] * 5,
-            out_channels = config['VQ-VAE']['codebook_dim'] * 5,
+            dim_mults    = (1,2,4,8),#config['Unet']['dim_mults']['hf'],
+            in_channels  = config['VQ']['codebook_dim'] * 5,
+            out_channels = config['VQ']['codebook_dim'] * 5,
             resnet_block_groups = config['Unet']['resnet_block_groups'],
             time_dim     = config['Unet']['time_dim'],
             class_dim    = config['Unet']['class_dim']
@@ -181,14 +181,9 @@ class VQVDM(nn.Module):
         
         C = x.shape[1]
         xf = time_to_timefreq(x, self.n_fft, C)  # (B, C, H, W)
-        
-        
         if spectrogram_padding is not None:
             xf = spectrogram_padding(xf)
-            
         z = encoder(xf)  # (b c h w)
-        
-        
         z_q, indices, vq_loss, perplexity = quantize(z, vq_model)  # (b c h w), (b (h w) h), ...
         
         return z_q, indices
@@ -201,6 +196,55 @@ class VQVDM(nn.Module):
         """
         
         if verbose:
+            '''
+            def forward(self, batch):
+                """
+                :param x: input time series (B, C, L)
+                """
+                x, y = batch
+
+                recons_loss = {'LF.time': 0., 'HF.time': 0., 'LF.timefreq': 0., 'HF.timefreq': 0., 'perceptual': 0.}
+                vq_losses = {'LF': None, 'HF': None}
+                perplexities = {'LF': 0., 'HF': 0.}
+
+                # time-frequency transformation: STFT(x)
+                C = x.shape[1]
+                xf = time_to_timefreq(x, self.n_fft, C)  # (B, C, H, W)
+                u_l = zero_pad_high_freq(xf)  # (B, C, H, W)
+                x_l = timefreq_to_time(u_l, self.n_fft, C)  # (B, C, L)
+
+                # register `upsample_size` in the decoders
+                for decoder in [self.decoder_l, self.decoder_h]:
+                    if not decoder.is_upsample_size_updated:
+                        decoder.register_upsample_size(torch.IntTensor(np.array(xf.shape[2:])))
+
+                # forward: low-freq
+                z_l = self.encoder_l(u_l)
+                z_q_l, indices_l, vq_loss_l, perplexity_l = quantize(z_l, self.vq_model_l)
+                xfhat_l = self.decoder_l(z_q_l)
+                uhat_l = zero_pad_high_freq(xfhat_l)
+                xhat_l = timefreq_to_time(uhat_l, self.n_fft, C)  # (B, C, L)
+
+                recons_loss['LF.time'] = F.mse_loss(x_l, xhat_l)
+                recons_loss['LF.timefreq'] = F.mse_loss(u_l, uhat_l)
+                perplexities['LF'] = perplexity_l
+                vq_losses['LF'] = vq_loss_l
+
+                # forward: high-freq
+                u_h = zero_pad_low_freq(xf)  # (B, C, H, W)
+                x_h = timefreq_to_time(u_h, self.n_fft, C)  # (B, C, L)
+
+                z_h = self.encoder_h(u_h)
+                z_q_h, indices_h, vq_loss_h, perplexity_h = quantize(z_h, self.vq_model_h)
+                xfhat_h = self.decoder_h(z_q_h)
+                uhat_h = zero_pad_low_freq(xfhat_h)
+                xhat_h = timefreq_to_time(uhat_h, self.n_fft, C)  # (B, C, L)
+
+                recons_loss['HF.time'] = F.l1_loss(x_h, xhat_h)
+                recons_loss['HF.timefreq'] = F.mse_loss(u_h, uhat_h)
+                perplexities['HF'] = perplexity_h
+                vq_losses['HF'] = vq_loss_h
+            '''
             B, C, L = x.shape 
             
             # STFT
@@ -210,14 +254,14 @@ class VQVDM(nn.Module):
             u_l = zero_pad_high_freq(u) # (B C=2 H=5 W)
             u_h = zero_pad_low_freq(u) # (B C=2 H=5 W)
             
+            # LF and HF signals
+            x_l = timefreq_to_time(u_l, self.n_fft, C)
+            x_h = timefreq_to_time(u_h, self.n_fft, C)
+            
             # encode
             z_l = self.encoder_l(u_l)  # (B C H W)
             z_h = self.encoder_h(u_h) # (B C H W)
             
-            # combine height and width of z_l
-            z_l_star = torch.flatten(z_l, start_dim=-2) # (B C H*W)
-            z_h_star = torch.flatten(z_h, start_dim=-2) # (B C H*W)
-
             # quantize            
             z_l_q, s_l, _, _ = quantize(z_l, self.vq_model_l)
             z_h_q, s_h, _, _ = quantize(z_h, self.vq_model_h)
@@ -227,41 +271,20 @@ class VQVDM(nn.Module):
             u_h_hat = self.decoder_h(z_h_q)
             
             # zero-pad
-            x_l_hat = zero_pad_high_freq(u_l_hat)
-            x_h_hat = zero_pad_high_freq(u_h_hat)
+            u_l_hat = zero_pad_high_freq(u_l_hat)
+            u_h_hat = zero_pad_low_freq(u_h_hat)
             
             # inverse STFT
             x_l_hat = timefreq_to_time(u_l_hat, self.n_fft, self.config['dataset']['in_channels'])
             x_h_hat = timefreq_to_time(u_h_hat, self.n_fft, self.config['dataset']['in_channels'])
             
-            # Print shapes
-            print('x shape:', x.shape)
-            print('u shape:', u.shape)
-            print('u_l shape:', u_l.shape)
-            print('u_h shape:', u_h.shape)
-            print('z_l shape:', z_l.shape)
-            print('z_h shape:', z_h.shape)
-            print('z_l_star shape:', z_l_star.shape)
-            print('z_h_star shape:', z_h_star.shape)
-            print('u_l_hat shape:', u_l_hat.shape)
-            print('u_h_hat shape:', u_h_hat.shape)
-            print('x_l_hat shape:', x_l_hat.shape)
-            print('x_h_hat shape:', x_h_hat.shape)
             
-            
-            return x, u, u_l, u_h, z_l, z_h, u_l_hat, u_h_hat, x_l_hat, x_h_hat
+            return x, x_l, x_h, u, u_l, u_h, z_l, z_h, u_l_hat, u_h_hat, x_l_hat, x_h_hat
 
 
         else:
             z_l, s_l = self.encode_to_z_q(x, self.encoder_l, self.vq_model_l, zero_pad_high_freq)  # (B C H W)
             z_h, s_h = self.encode_to_z_q(x, self.encoder_h, self.vq_model_h, zero_pad_low_freq)  # (B C H W)
-            
-            #print('z_l:', z_l.shape)
-            #print('z_h:', z_h.shape)
-            
-            # combine height and width of z_l
-            #z_l = torch.flatten(z_l, start_dim=-2) # (B C H*W)
-            #z_h = torch.flatten(z_h, start_dim=-2) # (B C H*W)
             
             # combine height with channels
             z_l = rearrange(z_l, 'B C H W -> B (C H) W')
@@ -300,9 +323,13 @@ class VQVDM(nn.Module):
         
     
 
-    def sample(self, n_samples: int, class_index=None, batch_size=256, guidance_scale=1.):
-        n_iters = floor(n_samples/batch_size)
-        sampling_steps = 100
+    def sample(self, n_samples: int, sampling_steps: int, class_index=None, batch_size=256, guidance_scale=1.):
+        n_iters = int((n_samples/batch_size))
+        
+        
+        print('n_samples:', type(n_samples))
+        print('batch_size:', batch_size)
+        
         
         X_l, X_h = [], []
         
