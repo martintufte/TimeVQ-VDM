@@ -7,6 +7,7 @@ from einops import rearrange
 
 import torch
 import torch.nn.functional as F
+import pytorch_lightning as pl
 import numpy as np
 from pathlib import Path
 
@@ -235,19 +236,19 @@ def save_model(models_dict: dict, dirname='saved_models', id: str = ''):
 
 ### --- time/timefreq ---
 
-def time_to_timefreq(x, n_fft: int, C: int):
+def time_to_timefreq(x, n_fft: int, hop_length: int, C: int):
     """
     x: (B, C, L)
     """
     x = rearrange(x, 'b c l -> (b c) l')
-    x = torch.stft(x, n_fft, normalized=False, return_complex=False)  # (B, N, T, 2); 2: (real, imag)
+    x = torch.stft(x, n_fft, hop_length, normalized=False, return_complex=False)  # (B, N, T, 2); 2: (real, imag)
     x = rearrange(x, '(b c) n t z -> b (c z) n t ', c=C)  # z=2 (real, imag)
     return x  # (B, C, H, W)
 
 
-def timefreq_to_time(x, n_fft: int, C: int):
+def timefreq_to_time(x, n_fft: int, hop_length: int, C: int):
     x = rearrange(x, 'b (c z) n t -> (b c) n t z', c=C)
-    x = torch.istft(x, n_fft, normalized=False, return_complex=False)
+    x = torch.istft(x, n_fft, hop_length, normalized=False, return_complex=False)
     x = rearrange(x, '(b c) l -> b c l', c=C)
     return x
 
@@ -345,8 +346,9 @@ def compute_downsample_rate(input_length: int, n_fft: int, downsampled_width: in
 
 # --- StandardScaler, inspiration: https://gist.github.com/farahmand-m/8a416f33a27d73a149f92ce4708beb40 ---
 
-class StandardScaler:
-    def __init__(self, mean=None, std=None, epsilon=1e-7):
+class StandardScaler(pl.LightningModule):
+    def __init__(self, mean=0.0, std=1.0, epsilon=1e-7):
+        super(StandardScaler, self).__init__()
         """Standard Scaler.
         The class can be used to normalize PyTorch Tensors using native functions. The module does not expect the
         tensors to be of any specific shape; as long as the features are the last dimension in the tensor, the module
@@ -355,14 +357,13 @@ class StandardScaler:
         :param std: The standard deviation of the features. The property will be set after a call to fit.
         :param epsilon: Used to avoid a Division-By-Zero exception.
         """
-        self.mean = mean
-        self.std = std
+        self.mean = torch.nn.Parameter(torch.full((1,), mean))
+        self.std = torch.nn.Parameter(torch.full((1,), std))
         self.epsilon = epsilon
 
     def fit(self, values):
-        dims = list(range(values.dim() - 1))
-        self.mean = torch.mean(values, dim=dims)
-        self.std = torch.std(values, dim=dims)
+        self.mean = values.mean()
+        self.std = values.std()
 
     def transform(self, values):
         return (values - self.mean) / (self.std + self.epsilon)
@@ -373,3 +374,8 @@ class StandardScaler:
     
     def inverse_transform(self, values):
         return (self.std + self.epsilon) * values + self.mean
+    
+    def forward(self, values):
+        return self.transform(values)
+    
+    

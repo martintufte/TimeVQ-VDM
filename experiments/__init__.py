@@ -1,3 +1,3 @@
-from experiments.exp_vq_vae import *
+from experiments.exp_vq_vae_diffusion import ExpVQVAEDiffusion
 
-experiments = {'VQ-VAE': ExpVQVAE}
+experiments = {'VQ-VAEVDM': ExpVQVAEDiffusion}

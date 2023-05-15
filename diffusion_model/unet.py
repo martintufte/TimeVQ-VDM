@@ -15,6 +15,7 @@ import pytorch_lightning as pl
 
 from einops import rearrange, reduce
 from utils import exists, default
+from typing import Union
 
 
 # --- Modules ---
@@ -278,7 +279,8 @@ class Unet(pl.LightningModule):
         learned_sinusoidal_cond = False,
         learned_sinusoidal_dim = 16,
         class_dim = 128,
-        time_dim = 128
+        time_dim = 128,
+        in_cond_channels = 0
     ):
         super().__init__()
         
@@ -286,16 +288,17 @@ class Unet(pl.LightningModule):
         self.ts_length = ts_length
         
         # number of in/out channels
-        self.in_channels  = in_channels
+        self.in_channels = in_channels
         self.out_channels = default(out_channels, in_channels)
         
         # number of classes
-        self.n_classes    = int(n_classes)
+        self.n_classes = int(n_classes)
         
         # dimensions (number of channels) and sizes of each layer
         self.dims = [dim] + [dim*m for m in dim_mults]
         self.mid_dim = self.dims[-1]
         
+        # length on each down layer
         self.sizes = [self.ts_length]
         for _ in dim_mults:
             self.sizes.append(self.sizes[-1] // 2)
@@ -305,25 +308,24 @@ class Unet(pl.LightningModule):
         self.time_dim = time_dim
         self.class_conditional = True if self.n_classes > 1 else False
         self.class_dim = class_dim if self.class_conditional else 0
-        self.emb_dim = self.time_dim + self.class_dim
+        
+        # full embedding dimension for Unet
+        self.emb_dim = self.time_dim + self.class_dim #+ self.lf_dim*95
         
         # padding mode
         self.padding_mode = 'replicate'
 
 
         # --- time embeddings ---
-        # similar to the one used in
-        # https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/denoising_diffusion_pytorch.py
+        # similar to https://github.com/lucidrains/denoising-diffusion-pytorch/blob/main/denoising_diffusion_pytorch/denoising_diffusion_pytorch.py
         self.learned_sinusoidal_cond = learned_sinusoidal_cond
         self.learned_sinusoidal_dim = learned_sinusoidal_dim
-
         if learned_sinusoidal_cond:
             sinu_pos_emb = LearnedSinusoidalPosEmb(self.learned_sinusoidal_dim)
             fourier_dim = self.learned_sinusoidal_dim + 1
         else:
             sinu_pos_emb = SinusoidalPosEmb(dim)
             fourier_dim = dim
-        
         self.time_emb = nn.Sequential(
             sinu_pos_emb,
             nn.Linear(fourier_dim, self.time_dim),
@@ -339,7 +341,7 @@ class Unet(pl.LightningModule):
         # --- layers ---
         
         # initial layer        
-        self.init_block = nn.Conv1d(in_channels, dim, kernel_size=7, padding=3, padding_mode=self.padding_mode)
+        self.init_block = nn.Conv1d(in_channels + in_cond_channels, dim, kernel_size=7, padding=3, padding_mode=self.padding_mode)
         
         # partially defined Resnet block
         resnet_block = partial(ResnetBlock, emb_dim=self.emb_dim, groups=resnet_block_groups, padding_mode=self.padding_mode)
@@ -374,32 +376,39 @@ class Unet(pl.LightningModule):
         self.final_conv_block = nn.Conv1d(dim, self.out_channels, kernel_size=1)
 
 
-    def forward(self, z, t, y=None):
+    def forward(self,
+                z,
+                t: Union[float, torch.tensor],
+                y: Union[None, torch.tensor] = None,
+                input_condition: Union[None, torch.tensor] = None):
         '''
         z : Latent variable
+        y : class condition
+        input_condition: input condition, concatenated to the input.
         t : time
-        y : class label
         '''
         
-        # 0. time and class embedding
-        # Hack, similar to the one used by Google Research in VDM:
-        # https://github.com/google-research/vdm/blob/main/model_vdm.py
-        t = t*1000
+        # -1. fix inputs
+        if type(t) == float:
+            t = torch.full((z.shape[0],), t, device=self.device)
+        
+        
+        # 0. scaler condition embedding
+        t *= 1000 # Hack, similar to Google Research (original VDM paper): https://github.com/google-research/vdm/blob/main/model_vdm.py
         emb = self.time_emb(t)
-        
-        
         if self.class_conditional:
             if exists(y):
                 y = y.type(torch.int32)
                 class_emb = self.class_emb(y)
             else:
-                y = torch.Tensor([self.n_classes]).type(torch.int32).repeat(z.shape[0]).to(self.device)
+                y = torch.full((z.shape[0],), self.n_classes, device=self.device)
                 class_emb = self.class_emb(y)
-                
             emb = torch.concat((emb, class_emb), dim=1)
         
         
         # 1. initial block
+        if exists(input_condition):
+            z = torch.concat((z, input_condition), dim=1)
         z = self.init_block(z)
         first_skip_connection = z.clone()
         
